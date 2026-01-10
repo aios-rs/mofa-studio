@@ -9,6 +9,7 @@
 use crate::bridge::{BridgeEvent, BridgeState, DoraBridge};
 use crate::data::{AudioData, DoraData, EventMetadata};
 use crate::error::{BridgeError, BridgeResult};
+use crate::shared_state::SharedDoraState;
 use arrow::array::Array;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use dora_node_api::{
@@ -30,14 +31,12 @@ pub struct AudioPlayerBridge {
     node_id: String,
     /// Current state
     state: Arc<RwLock<BridgeState>>,
-    /// Event sender to widget
+    /// Shared state for direct UI communication (replaces channels)
+    shared_state: Option<Arc<SharedDoraState>>,
+    /// Event sender to widget (for connection events)
     event_sender: Sender<BridgeEvent>,
     /// Event receiver for widget
     event_receiver: Receiver<BridgeEvent>,
-    /// Audio data sender to widget
-    audio_sender: Sender<AudioData>,
-    /// Audio data receiver for widget
-    audio_receiver: Receiver<AudioData>,
     /// Buffer status sender from widget
     buffer_status_sender: Sender<f64>,
     /// Buffer status receiver for dora
@@ -49,30 +48,27 @@ pub struct AudioPlayerBridge {
 }
 
 impl AudioPlayerBridge {
-    /// Create a new audio player bridge
+    /// Create a new audio player bridge (legacy - without shared state)
     pub fn new(node_id: &str) -> Self {
+        Self::with_shared_state(node_id, None)
+    }
+
+    /// Create a new audio player bridge with shared state
+    pub fn with_shared_state(node_id: &str, shared_state: Option<Arc<SharedDoraState>>) -> Self {
         let (event_tx, event_rx) = bounded(100);
-        // Use larger buffer to prevent blocking which would stall the pipeline
-        let (audio_tx, audio_rx) = bounded(500);
         let (buffer_tx, buffer_rx) = bounded(10);
 
         Self {
             node_id: node_id.to_string(),
             state: Arc::new(RwLock::new(BridgeState::Disconnected)),
+            shared_state,
             event_sender: event_tx,
             event_receiver: event_rx,
-            audio_sender: audio_tx,
-            audio_receiver: audio_rx,
             buffer_status_sender: buffer_tx,
             buffer_status_receiver: buffer_rx,
             stop_sender: None,
             worker_handle: None,
         }
-    }
-
-    /// Get receiver for audio data (widget uses this)
-    pub fn audio_receiver(&self) -> Receiver<AudioData> {
-        self.audio_receiver.clone()
     }
 
     /// Send buffer status back to dora (widget calls this)
@@ -86,8 +82,8 @@ impl AudioPlayerBridge {
     fn run_event_loop(
         node_id: String,
         state: Arc<RwLock<BridgeState>>,
+        shared_state: Option<Arc<SharedDoraState>>,
         event_sender: Sender<BridgeEvent>,
-        audio_sender: Sender<AudioData>,
         buffer_status_receiver: Receiver<f64>,
         stop_receiver: Receiver<()>,
     ) {
@@ -101,12 +97,18 @@ impl AudioPlayerBridge {
                     error!("Failed to init dora node {}: {}", node_id, e);
                     *state.write() = BridgeState::Error;
                     let _ = event_sender.send(BridgeEvent::Error(format!("Init failed: {}", e)));
+                    if let Some(ref ss) = shared_state {
+                        ss.set_error(Some(format!("Init failed: {}", e)));
+                    }
                     return;
                 }
             };
 
         *state.write() = BridgeState::Connected;
         let _ = event_sender.send(BridgeEvent::Connected);
+        if let Some(ref ss) = shared_state {
+            ss.add_bridge(node_id.clone());
+        }
 
         // Session tracking - track which question_ids we've sent session_start for
         // to avoid flooding the controller with duplicate signals
@@ -143,7 +145,7 @@ impl AudioPlayerBridge {
                     Self::handle_dora_event(
                         event,
                         &mut node,
-                        &audio_sender,
+                        shared_state.as_ref(),
                         &event_sender,
                         &mut session_start_sent_for,
                         &mut active_participant,
@@ -158,6 +160,9 @@ impl AudioPlayerBridge {
 
         *state.write() = BridgeState::Disconnected;
         let _ = event_sender.send(BridgeEvent::Disconnected);
+        if let Some(ref ss) = shared_state {
+            ss.remove_bridge(&node_id);
+        }
         info!("Audio player bridge event loop ended");
     }
 
@@ -165,7 +170,7 @@ impl AudioPlayerBridge {
     fn handle_dora_event(
         event: Event,
         node: &mut DoraNode,
-        audio_sender: &Sender<AudioData>,
+        shared_state: Option<&Arc<SharedDoraState>>,
         event_sender: &Sender<BridgeEvent>,
         session_start_sent_for: &mut std::collections::HashSet<String>,
         active_participant: &mut Option<String>,
@@ -273,11 +278,13 @@ impl AudioPlayerBridge {
                             audio_data_with_participant.question_id = Some(qid.to_string());
                         }
 
-                        // Use try_send() to avoid blocking if channel is full
-                        // Blocking here would prevent session_start/audio_complete from being sent
-                        if let Err(e) = audio_sender.try_send(audio_data_with_participant.clone()) {
-                            warn!("Audio channel full, dropping audio chunk: {}", e);
+                        // Use shared state if available (new architecture)
+                        // AudioState.push() uses a ring buffer internally
+                        if let Some(ss) = shared_state {
+                            ss.audio.push(audio_data_with_participant.clone());
                         }
+
+                        // Also send via event channel for backward compatibility
                         let _ = event_sender.try_send(BridgeEvent::DataReceived {
                             input_id: input_id.to_string(),
                             data: DoraData::Audio(audio_data_with_participant),
@@ -561,16 +568,16 @@ impl DoraBridge for AudioPlayerBridge {
 
         let node_id = self.node_id.clone();
         let state = Arc::clone(&self.state);
+        let shared_state = self.shared_state.clone();
         let event_sender = self.event_sender.clone();
-        let audio_sender = self.audio_sender.clone();
         let buffer_receiver = self.buffer_status_receiver.clone();
 
         let handle = thread::spawn(move || {
             Self::run_event_loop(
                 node_id,
                 state,
+                shared_state,
                 event_sender,
-                audio_sender,
                 buffer_receiver,
                 stop_rx,
             );

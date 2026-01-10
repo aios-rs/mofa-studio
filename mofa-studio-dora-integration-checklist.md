@@ -739,38 +739,127 @@ rg "FONT_REGULAR|FONT_BOLD|FONT_FAMILY" --type rust
 
 ## P2: Medium Priority (Do Third)
 
-### P2.1 - Shared State Pattern
+### P2.1 - SharedDoraState Architecture (Simplify Dora↔UI Communication)
 
-**Problem:** UI and bridge thread tightly coupled via events.
-
-**Target:** Shell coordinator pattern.
-
-```rust
-// Add to mofa-studio-shell/src/app.rs
-pub struct DoraState {
-    pub buffer_fill: f64,
-    pub participants: Vec<ParticipantState>,
-    pub chat_messages: Vec<ChatMessage>,
-    pub connection_status: ConnectionStatus,
-    pub pending_commands: Vec<DoraCommand>,
-}
-
-impl App {
-    #[rust]
-    dora_state: DoraState,
-
-    fn notify_buffer_change(&mut self, cx: &mut Cx) {
-        // Update UI widgets with new buffer state
-        self.ui.buffer_gauge(ids!(...)).set_fill(cx, self.dora_state.buffer_fill);
-    }
-}
+**Problem:** Current architecture has 4 layers of indirection for Dora data:
+```
+Bridge → chat_sender channel → dora_integration worker → event_tx channel → screen.poll_dora_events()
 ```
 
+This causes:
+- 4+ channels with different capacities
+- Multiple polling loops (10ms, 50ms, 100ms)
+- Message consolidation in multiple places
+- ~500+ lines of boilerplate
+
+**Solution:** Replace channels with `SharedDoraState` using `Arc<RwLock>` with dirty tracking.
+
+```
+Bridge → SharedDoraState (Arc<RwLock>) ← UI reads on single timer
+```
+
+#### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DORA BRIDGES (Worker Threads)                        │
+├─────────────────────┬─────────────────────┬─────────────────────────────────┤
+│  PromptInputBridge  │  AudioPlayerBridge  │  SystemLogBridge                │
+│                     │                     │                                 │
+│  state.chat.push()  │  state.audio.push() │  state.logs.push()              │
+└─────────┬───────────┴──────────┬──────────┴───────────────┬─────────────────┘
+          │         Direct write (no channels)              │
+          ▼                      ▼                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     SharedDoraState (Arc<...>)                              │
+│                                                                             │
+│  chat: ChatState        audio: AudioState       logs: DirtyVec<LogEntry>   │
+│  status: DirtyValue<DoraStatus>                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │          Read on UI timer (single poll)         │
+          ▼                      ▼                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        MoFaFMScreen (UI Thread)                             │
+│  poll_dora_state() - single function reads all dirty data                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### File Structure
+
+```
+mofa-dora-bridge/src/
+├── lib.rs                 # Re-exports SharedDoraState
+├── data.rs                # ChatMessage, AudioChunk, LogEntry (exists)
+├── shared_state.rs        # NEW: SharedDoraState, DirtyVec, DirtyValue
+├── dispatcher.rs          # Creates bridges with shared state
+└── widgets/
+    ├── prompt_input.rs    # Uses state.chat.push()
+    ├── audio_player.rs    # Uses state.audio.push()
+    └── system_log.rs      # Uses state.logs.push()
+```
+
+#### Implementation Steps
+
+**Step 1: Create SharedDoraState** (`mofa-dora-bridge/src/shared_state.rs`)
+- [ ] Create `DirtyVec<T>` - dirty-trackable collection
+- [ ] Create `DirtyValue<T>` - dirty-trackable single value
+- [ ] Create `ChatState` - with streaming consolidation logic
+- [ ] Create `AudioState` - ring buffer for audio chunks
+- [ ] Create `SharedDoraState` - unified state container
+- [ ] Export from `lib.rs`
+
+**Step 2: Update PromptInputBridge**
+- [ ] Accept `Arc<SharedDoraState>` in constructor
+- [ ] Replace `chat_sender.send()` with `state.chat.push()`
+- [ ] Remove channel creation code
+- [ ] Move streaming consolidation to `ChatState.push()`
+
+**Step 3: Update AudioPlayerBridge**
+- [ ] Accept `Arc<SharedDoraState>` in constructor
+- [ ] Replace `audio_sender.send()` with `state.audio.push()`
+- [ ] Remove channel creation code
+
+**Step 4: Update SystemLogBridge**
+- [ ] Accept `Arc<SharedDoraState>` in constructor
+- [ ] Replace `log_sender.send()` with `state.logs.push()`
+- [ ] Remove channel creation code
+
+**Step 5: Update Dispatcher**
+- [ ] Create `SharedDoraState` on init
+- [ ] Pass to all bridges on creation
+- [ ] Expose `state()` method for UI access
+
+**Step 6: Update DoraIntegration**
+- [ ] Remove event channels and polling worker
+- [ ] Expose `state()` -> `Arc<SharedDoraState>`
+- [ ] Simplify to just manage dataflow lifecycle
+
+**Step 7: Update MoFaFMScreen**
+- [ ] Replace `poll_dora_events()` with `poll_dora_state()`
+- [ ] Single timer reads all dirty data
+- [ ] Remove `pending_streaming_messages` (handled in ChatState)
+- [ ] Remove multiple poll functions
+
+#### Benefits
+
+| Aspect | Current | After |
+|--------|---------|-------|
+| Channels | 4+ | 0 |
+| Polling loops | 3 | 1 |
+| Message consolidation | Multiple places | 1 per data type |
+| Code lines | ~500+ | ~150 |
+| Latency | 10ms + 100ms | Single timer |
+
 **Files to Modify:**
-- [ ] Create `DoraState` struct in shell or shared location
-- [ ] Add state field to `App` struct
-- [ ] Add notification methods for state changes
-- [ ] Update UI to read from state
+- [ ] `mofa-dora-bridge/src/shared_state.rs` (NEW)
+- [ ] `mofa-dora-bridge/src/lib.rs`
+- [ ] `mofa-dora-bridge/src/widgets/prompt_input.rs`
+- [ ] `mofa-dora-bridge/src/widgets/audio_player.rs`
+- [ ] `mofa-dora-bridge/src/widgets/system_log.rs`
+- [ ] `mofa-dora-bridge/src/dispatcher.rs`
+- [ ] `apps/mofa-fm/src/dora_integration.rs`
+- [ ] `apps/mofa-fm/src/screen/mod.rs`
+- [ ] `apps/mofa-fm/src/screen/dora_handlers.rs`
 
 ---
 

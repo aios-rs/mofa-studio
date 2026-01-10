@@ -8,6 +8,7 @@
 use crate::bridge::{BridgeEvent, BridgeState, DoraBridge};
 use crate::data::{current_timestamp, DoraData, EventMetadata, LogEntry, LogLevel};
 use crate::error::{BridgeError, BridgeResult};
+use crate::shared_state::SharedDoraState;
 use arrow::array::Array;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use dora_node_api::{dora_core::config::NodeId, DoraNode, Event, Parameter};
@@ -23,14 +24,12 @@ pub struct SystemLogBridge {
     node_id: String,
     /// Current state
     state: Arc<RwLock<BridgeState>>,
-    /// Event sender to widget
+    /// Shared state for direct UI communication (replaces channels)
+    shared_state: Option<Arc<SharedDoraState>>,
+    /// Event sender to widget (for connection events)
     event_sender: Sender<BridgeEvent>,
     /// Event receiver for widget
     event_receiver: Receiver<BridgeEvent>,
-    /// Log entry sender to widget
-    log_sender: Sender<LogEntry>,
-    /// Log entry receiver for widget
-    log_receiver: Receiver<LogEntry>,
     /// Known log sources
     log_sources: Arc<RwLock<HashSet<String>>>,
     /// Minimum log level filter
@@ -42,28 +41,26 @@ pub struct SystemLogBridge {
 }
 
 impl SystemLogBridge {
-    /// Create a new system log bridge
+    /// Create a new system log bridge (legacy - without shared state)
     pub fn new(node_id: &str) -> Self {
+        Self::with_shared_state(node_id, None)
+    }
+
+    /// Create a new system log bridge with shared state
+    pub fn with_shared_state(node_id: &str, shared_state: Option<Arc<SharedDoraState>>) -> Self {
         let (event_tx, event_rx) = bounded(100);
-        let (log_tx, log_rx) = bounded(1000);
 
         Self {
             node_id: node_id.to_string(),
             state: Arc::new(RwLock::new(BridgeState::Disconnected)),
+            shared_state,
             event_sender: event_tx,
             event_receiver: event_rx,
-            log_sender: log_tx,
-            log_receiver: log_rx,
             log_sources: Arc::new(RwLock::new(HashSet::new())),
             min_level: Arc::new(RwLock::new(LogLevel::Info)),
             stop_sender: None,
             worker_handle: None,
         }
-    }
-
-    /// Get receiver for log entries (widget uses this)
-    pub fn log_receiver(&self) -> Receiver<LogEntry> {
-        self.log_receiver.clone()
     }
 
     /// Set minimum log level filter
@@ -80,8 +77,8 @@ impl SystemLogBridge {
     fn run_event_loop(
         node_id: String,
         state: Arc<RwLock<BridgeState>>,
+        shared_state: Option<Arc<SharedDoraState>>,
         event_sender: Sender<BridgeEvent>,
-        log_sender: Sender<LogEntry>,
         log_sources: Arc<RwLock<HashSet<String>>>,
         min_level: Arc<RwLock<LogLevel>>,
         stop_receiver: Receiver<()>,
@@ -95,12 +92,18 @@ impl SystemLogBridge {
                 error!("Failed to init dora node {}: {}", node_id, e);
                 *state.write() = BridgeState::Error;
                 let _ = event_sender.send(BridgeEvent::Error(format!("Init failed: {}", e)));
+                if let Some(ref ss) = shared_state {
+                    ss.set_error(Some(format!("Init failed: {}", e)));
+                }
                 return;
             }
         };
 
         *state.write() = BridgeState::Connected;
         let _ = event_sender.send(BridgeEvent::Connected);
+        if let Some(ref ss) = shared_state {
+            ss.add_bridge(node_id.clone());
+        }
 
         // Event loop
         loop {
@@ -115,7 +118,7 @@ impl SystemLogBridge {
                 Some(event) => {
                     Self::handle_dora_event(
                         event,
-                        &log_sender,
+                        shared_state.as_ref(),
                         &event_sender,
                         &log_sources,
                         &min_level,
@@ -129,13 +132,16 @@ impl SystemLogBridge {
 
         *state.write() = BridgeState::Disconnected;
         let _ = event_sender.send(BridgeEvent::Disconnected);
+        if let Some(ref ss) = shared_state {
+            ss.remove_bridge(&node_id);
+        }
         info!("System log bridge event loop ended");
     }
 
     /// Handle a dora event
     fn handle_dora_event(
         event: Event,
-        log_sender: &Sender<LogEntry>,
+        shared_state: Option<&Arc<SharedDoraState>>,
         event_sender: &Sender<BridgeEvent>,
         log_sources: &Arc<RwLock<HashSet<String>>>,
         min_level: &Arc<RwLock<LogLevel>>,
@@ -177,7 +183,13 @@ impl SystemLogBridge {
                             "[{}] {}: {}",
                             log_entry.level, log_entry.node_id, log_entry.message
                         );
-                        let _ = log_sender.send(log_entry.clone());
+
+                        // Use shared state if available (new architecture)
+                        if let Some(ss) = shared_state {
+                            ss.logs.push(log_entry.clone());
+                        }
+
+                        // Also send via event channel for backward compatibility
                         let _ = event_sender.send(BridgeEvent::DataReceived {
                             input_id: input_id.to_string(),
                             data: DoraData::Log(log_entry),
@@ -295,8 +307,8 @@ impl DoraBridge for SystemLogBridge {
 
         let node_id = self.node_id.clone();
         let state = Arc::clone(&self.state);
+        let shared_state = self.shared_state.clone();
         let event_sender = self.event_sender.clone();
-        let log_sender = self.log_sender.clone();
         let log_sources = Arc::clone(&self.log_sources);
         let min_level = Arc::clone(&self.min_level);
 
@@ -304,8 +316,8 @@ impl DoraBridge for SystemLogBridge {
             Self::run_event_loop(
                 node_id,
                 state,
+                shared_state,
                 event_sender,
-                log_sender,
                 log_sources,
                 min_level,
                 stop_rx,
