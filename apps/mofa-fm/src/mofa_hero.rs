@@ -197,8 +197,13 @@ live_design! {
         draw_bg: {
             instance dark_mode: 0.0
             border_radius: (HERO_RADIUS)
-            fn get_color(self) -> vec4 {
-                return mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+            fn pixel(self) -> vec4 {
+                let sdf = Sdf2d::viewport(self.pos * self.rect_size);
+                let r = self.border_radius;
+                let bg = mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+                sdf.box(0., 0., self.rect_size.x, self.rect_size.y, r);
+                sdf.fill(bg);
+                return sdf.result;
             }
         }
         flow: Down
@@ -240,8 +245,13 @@ live_design! {
             draw_bg: {
                 instance dark_mode: 0.0
                 border_radius: (HERO_RADIUS)
-                fn get_color(self) -> vec4 {
-                    return mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+                fn pixel(self) -> vec4 {
+                    let sdf = Sdf2d::viewport(self.pos * self.rect_size);
+                    let r = self.border_radius;
+                    let bg = mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+                    sdf.box(0., 0., self.rect_size.x, self.rect_size.y, r);
+                    sdf.fill(bg);
+                    return sdf.result;
                 }
             }
             flow: Down

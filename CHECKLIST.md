@@ -385,6 +385,124 @@ let app_clicked =
 
 **Note**: Full data-driven approach (AppEntry model, dynamic generation) deferred to App Plugin System task which will provide the registry infrastructure needed
 
+### P1.1.1 - Hero Panel Container Fix ✅ DONE
+
+**Issue**: Hero panel section containers (StatusSection, action_section) were not rendering backgrounds when using `fn get_color(self)` in the shader.
+
+**Root Cause**: RoundedView's `draw_bg` with `fn get_color(self)` was not properly rendering the background. The function was defined but the actual pixels weren't being drawn.
+
+**Solution**: Changed from `fn get_color(self)` to explicit `fn pixel(self)` with SDF drawing:
+
+```rust
+// Before (not working)
+draw_bg: {
+    instance dark_mode: 0.0
+    border_radius: (HERO_RADIUS)
+    fn get_color(self) -> vec4 {
+        return mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+    }
+}
+
+// After (working)
+draw_bg: {
+    instance dark_mode: 0.0
+    border_radius: (HERO_RADIUS)
+    fn pixel(self) -> vec4 {
+        let sdf = Sdf2d::viewport(self.pos * self.rect_size);
+        let r = self.border_radius;
+        let bg = mix((PANEL_BG), (PANEL_BG_DARK), self.dark_mode);
+        sdf.box(0., 0., self.rect_size.x, self.rect_size.y, r);
+        sdf.fill(bg);
+        return sdf.result;
+    }
+}
+```
+
+**Key Learning**: For RoundedView backgrounds with dark mode support, use explicit `fn pixel(self)` with SDF drawing rather than `fn get_color(self)`. The pixel function gives full control over the rendering.
+
+**Files Modified**:
+- `apps/mofa-fm/src/mofa_hero.rs` - StatusSection template and action_section
+
+---
+
+### P1.1.2 - Copy Button NextFrame Animation ✅ DONE
+
+**Issue**: Copy buttons (chat and log) had no visible animation feedback. The previous timer-based approach caused abrupt on/off transitions.
+
+**Solution**: Replaced timer-based animation with NextFrame-based smooth fade animation.
+
+**Implementation**:
+
+1. **State Variables** - Track animation state with start time:
+```rust
+#[rust]
+copy_chat_flash_active: bool,
+#[rust]
+copy_chat_flash_start: f64,  // Absolute start time (0.0 = not started)
+```
+
+2. **Click Handler** - Trigger animation on button click:
+```rust
+Hit::FingerUp(_) => {
+    self.copy_chat_to_clipboard(cx);
+    // Set copied to 1.0 for immediate green flash
+    self.view.view(ids!(...copy_chat_btn))
+        .apply_over(cx, live!{ draw_bg: { copied: 1.0 } });
+    self.copy_chat_flash_active = true;
+    self.copy_chat_flash_start = 0.0;  // Sentinel: capture time on first NextFrame
+    cx.new_next_frame();
+    self.view.redraw(cx);
+}
+```
+
+3. **NextFrame Handler** - Smooth fade with smoothstep interpolation:
+```rust
+if let Event::NextFrame(nf) = event {
+    if self.copy_chat_flash_active {
+        // Capture start time on first frame
+        if self.copy_chat_flash_start == 0.0 {
+            self.copy_chat_flash_start = nf.time;
+        }
+        let elapsed = nf.time - self.copy_chat_flash_start;
+
+        // Hold at full brightness for 0.3s, then fade out over 0.5s
+        let fade_start = 0.3;
+        let fade_duration = 0.5;
+
+        if elapsed >= fade_start + fade_duration {
+            // Animation complete
+            self.copy_chat_flash_active = false;
+            // Reset copied to 0.0
+        } else if elapsed >= fade_start {
+            // Smoothstep fade: 3t² - 2t³
+            let t = (elapsed - fade_start) / fade_duration;
+            let smooth_t = t * t * (3.0 - 2.0 * t);
+            let copied = 1.0 - smooth_t;
+            // Apply interpolated value
+        }
+
+        if self.copy_chat_flash_active {
+            cx.new_next_frame();  // Continue animation
+        }
+    }
+}
+```
+
+**Key Learnings**:
+- `nf.time` is **absolute time**, not delta time - must track start time separately
+- Use `cx.new_next_frame()` (not `request_next_frame()`) in Makepad
+- Smoothstep (`3t² - 2t³`) provides visually pleasing ease-out curve
+- Animation is self-terminating: stops requesting frames when complete
+
+**Animation Timing**:
+- 0.0s - 0.3s: Hold at full green (copied = 1.0)
+- 0.3s - 0.8s: Smooth fade to gray (copied: 1.0 → 0.0)
+
+**Files Modified**:
+- `apps/mofa-fm/src/screen/mod.rs` - NextFrame animation for both copy buttons
+
+---
+
 ### P1.2 - Fix Magic Strings ✅ DONE
 
 Created type-safe `TabId` enum to replace magic string literals:
@@ -996,7 +1114,7 @@ Current `MofaApp` trait is **90% complete**:
 
 ---
 
-*Last Updated: 2026-01-04*
+*Last Updated: 2026-01-09*
 *P0 Completed: 2026-01-04*
 *P1 Completed: 2026-01-04*
 *P2 Completed: 2026-01-04*

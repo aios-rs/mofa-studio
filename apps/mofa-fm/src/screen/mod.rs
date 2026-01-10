@@ -16,7 +16,7 @@ use crate::mofa_hero::{MofaHeroWidgetExt, MofaHeroAction};
 use crate::log_bridge;
 use crate::dora_integration::{DoraIntegration, DoraCommand};
 use mofa_widgets::participant_panel::ParticipantPanelWidgetExt;
-use mofa_widgets::StateChangeListener;
+use mofa_widgets::{StateChangeListener, TimerControl};
 use std::path::PathBuf;
 
 live_design! {
@@ -152,28 +152,50 @@ live_design! {
                         }
                         <Filler> {}
                         // Copy to clipboard button
-                        copy_chat_btn = <Button> {
+                        copy_chat_btn = <View> {
                             width: 28, height: 24
-                            text: ""
+                            cursor: Hand
+                            show_bg: true
                             draw_bg: {
-                                instance hover: 0.0
-                                instance pressed: 0.0
                                 instance copied: 0.0
+                                instance dark_mode: 0.0
                                 fn pixel(self) -> vec4 {
                                     let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                                     let c = self.rect_size * 0.5;
 
-                                    // Background - flash green when copied
+                                    // Light theme: Green → Teal → Blue → Gray
+                                    let gray_light = (BORDER);
+                                    let blue_light = vec4(0.231, 0.510, 0.965, 1.0);   // #3b82f6
+                                    let teal_light = vec4(0.078, 0.722, 0.651, 1.0);   // #14b8a6
+                                    let green_light = vec4(0.133, 0.773, 0.373, 1.0);  // #22c55f
+
+                                    // Dark theme: Bright Green → Cyan → Purple → Slate
+                                    let gray_dark = vec4(0.334, 0.371, 0.451, 1.0);    // #555e73 (slate-600)
+                                    let purple_dark = vec4(0.639, 0.380, 0.957, 1.0);  // #a361f4
+                                    let cyan_dark = vec4(0.133, 0.831, 0.894, 1.0);    // #22d4e4
+                                    let green_dark = vec4(0.290, 0.949, 0.424, 1.0);   // #4af26c
+
+                                    // Select colors based on dark mode
+                                    let gray = mix(gray_light, gray_dark, self.dark_mode);
+                                    let c1 = mix(blue_light, purple_dark, self.dark_mode);
+                                    let c2 = mix(teal_light, cyan_dark, self.dark_mode);
+                                    let c3 = mix(green_light, green_dark, self.dark_mode);
+
+                                    // Multi-stop gradient based on copied value
+                                    let t = self.copied;
+                                    let bg_color = mix(
+                                        mix(mix(gray, c1, clamp(t * 3.0, 0.0, 1.0)),
+                                            c2, clamp((t - 0.33) * 3.0, 0.0, 1.0)),
+                                        c3, clamp((t - 0.66) * 3.0, 0.0, 1.0)
+                                    );
+
                                     sdf.box(0., 0., self.rect_size.x, self.rect_size.y, 4.0);
-                                    let bg_color = mix((BORDER), (GRAY_300), self.hover);
-                                    let bg_color = mix(bg_color, (TEXT_MUTED), self.pressed);
-                                    let bg_color = mix(bg_color, #22c55e, self.copied);
                                     sdf.fill(bg_color);
 
-                                    // Icon color - white when copied for contrast
-                                    let icon_color = mix((GRAY_600), #ffffff, self.copied);
+                                    // Icon color - white when active, gray otherwise
+                                    let icon_base = mix((GRAY_600), vec4(0.580, 0.639, 0.722, 1.0), self.dark_mode);
+                                    let icon_color = mix(icon_base, vec4(1.0, 1.0, 1.0, 1.0), smoothstep(0.0, 0.3, self.copied));
 
-                                    // Always draw clipboard, color changes to indicate success
                                     // Clipboard icon - back rectangle
                                     sdf.box(c.x - 4.0, c.y - 2.0, 8.0, 9.0, 1.0);
                                     sdf.stroke(icon_color, 1.2);
@@ -185,18 +207,6 @@ live_design! {
                                     sdf.stroke(icon_color, 1.2);
 
                                     return sdf.result;
-                                }
-                            }
-                            animator: {
-                                hover = {
-                                    default: off
-                                    off = { from: {all: Forward {duration: 0.1}} apply: {draw_bg: {hover: 0.0}} }
-                                    on = { from: {all: Forward {duration: 0.1}} apply: {draw_bg: {hover: 1.0}} }
-                                }
-                                pressed = {
-                                    default: off
-                                    off = { from: {all: Forward {duration: 0.05}} apply: {draw_bg: {pressed: 0.0}} }
-                                    on = { from: {all: Forward {duration: 0.02}} apply: {draw_bg: {pressed: 1.0}} }
                                 }
                             }
                         }
@@ -274,10 +284,25 @@ live_design! {
 
                             mic_icon_on = <View> {
                                 width: Fit, height: Fit
+                                icon = <Icon> {
+                                    draw_icon: {
+                                        instance dark_mode: 0.0
+                                        svg_file: dep("crate://self/resources/icons/mic.svg")
+                                        fn get_color(self) -> vec4 {
+                                            return mix((SLATE_500), (WHITE), self.dark_mode);
+                                        }
+                                    }
+                                    icon_walk: {width: 20, height: 20}
+                                }
+                            }
+
+                            mic_icon_off = <View> {
+                                width: Fit, height: Fit
+                                visible: false
                                 <Icon> {
                                     draw_icon: {
-                                        svg_file: dep("crate://self/resources/icons/mic.svg")
-                                        fn get_color(self) -> vec4 { return (SLATE_500); }
+                                        svg_file: dep("crate://self/resources/icons/mic-off.svg")
+                                        fn get_color(self) -> vec4 { return (ACCENT_RED); }
                                     }
                                     icon_walk: {width: 20, height: 20}
                                 }
@@ -397,8 +422,8 @@ live_design! {
                             align: {y: 0.5}
 
                             input_device_label = <Label> {
-                                width: 70  // Fixed width for alignment with output label
-                                text: "Mic:"
+                                width: 90  // Fixed width for alignment with output label
+                                text: "Microphone:"
                                 draw_text: {
                                     instance dark_mode: 0.0
                                     text_style: <FONT_MEDIUM>{ font_size: 11.0 }
@@ -421,7 +446,7 @@ live_design! {
                                     fn pixel(self) -> vec4 {
                                         let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                                         sdf.box(0., 0., self.rect_size.x, self.rect_size.y, 3.0);
-                                        let bg = mix((WHITE), (SLATE_700), self.dark_mode);
+                                        let bg = mix((SLATE_100), (SLATE_700), self.dark_mode);
                                         sdf.fill(bg);
                                         return sdf.result;
                                     }
@@ -430,7 +455,7 @@ live_design! {
                                     instance dark_mode: 0.0
                                     text_style: <FONT_REGULAR>{ font_size: 11.0 }
                                     fn get_color(self) -> vec4 {
-                                        let light = mix((GRAY_700), (TEXT_PRIMARY), self.focus);
+                                        let light = mix((SLATE_500), (TEXT_PRIMARY), self.focus);
                                         let dark = mix((SLATE_300), (TEXT_PRIMARY_DARK), self.focus);
                                         return mix(light, dark, self.dark_mode);
                                     }
@@ -490,7 +515,7 @@ live_design! {
                             align: {y: 0.5}
 
                             output_device_label = <Label> {
-                                width: 70  // Fixed width for alignment with input label
+                                width: 90  // Fixed width for alignment with input label
                                 text: "Speaker:"
                                 draw_text: {
                                     instance dark_mode: 0.0
@@ -514,7 +539,7 @@ live_design! {
                                     fn pixel(self) -> vec4 {
                                         let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                                         sdf.box(0., 0., self.rect_size.x, self.rect_size.y, 3.0);
-                                        let bg = mix((WHITE), (SLATE_700), self.dark_mode);
+                                        let bg = mix((SLATE_100), (SLATE_700), self.dark_mode);
                                         sdf.fill(bg);
                                         return sdf.result;
                                     }
@@ -523,7 +548,7 @@ live_design! {
                                     instance dark_mode: 0.0
                                     text_style: <FONT_REGULAR>{ font_size: 11.0 }
                                     fn get_color(self) -> vec4 {
-                                        let light = mix((GRAY_700), (TEXT_PRIMARY), self.focus);
+                                        let light = mix((SLATE_500), (TEXT_PRIMARY), self.focus);
                                         let dark = mix((SLATE_300), (TEXT_PRIMARY_DARK), self.focus);
                                         return mix(light, dark, self.dark_mode);
                                     }
@@ -610,7 +635,7 @@ live_design! {
                                 fn pixel(self) -> vec4 {
                                     let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                                     sdf.box(0., 0., self.rect_size.x, self.rect_size.y, self.border_radius);
-                                    let bg = mix((SLATE_50), (SLATE_700), self.dark_mode);
+                                    let bg = mix((SLATE_200), (SLATE_700), self.dark_mode);
                                     sdf.fill(bg);
                                     return sdf.result;
                                 }
@@ -959,26 +984,49 @@ live_design! {
                         }
 
                         // Copy to clipboard button
-                        copy_log_btn = <Button> {
+                        copy_log_btn = <View> {
                             width: 28, height: 24
-                            text: ""
+                            cursor: Hand
+                            show_bg: true
                             draw_bg: {
-                                instance hover: 0.0
-                                instance pressed: 0.0
                                 instance copied: 0.0
+                                instance dark_mode: 0.0
                                 fn pixel(self) -> vec4 {
                                     let sdf = Sdf2d::viewport(self.pos * self.rect_size);
                                     let c = self.rect_size * 0.5;
 
-                                    // Background - flash green when copied
+                                    // Light theme: Green → Teal → Blue → Gray
+                                    let gray_light = (BORDER);
+                                    let blue_light = vec4(0.231, 0.510, 0.965, 1.0);   // #3b82f6
+                                    let teal_light = vec4(0.078, 0.722, 0.651, 1.0);   // #14b8a6
+                                    let green_light = vec4(0.133, 0.773, 0.373, 1.0);  // #22c55f
+
+                                    // Dark theme: Bright Green → Cyan → Purple → Slate
+                                    let gray_dark = vec4(0.334, 0.371, 0.451, 1.0);    // #555e73 (slate-600)
+                                    let purple_dark = vec4(0.639, 0.380, 0.957, 1.0);  // #a361f4
+                                    let cyan_dark = vec4(0.133, 0.831, 0.894, 1.0);    // #22d4e4
+                                    let green_dark = vec4(0.290, 0.949, 0.424, 1.0);   // #4af26c
+
+                                    // Select colors based on dark mode
+                                    let gray = mix(gray_light, gray_dark, self.dark_mode);
+                                    let c1 = mix(blue_light, purple_dark, self.dark_mode);
+                                    let c2 = mix(teal_light, cyan_dark, self.dark_mode);
+                                    let c3 = mix(green_light, green_dark, self.dark_mode);
+
+                                    // Multi-stop gradient based on copied value
+                                    let t = self.copied;
+                                    let bg_color = mix(
+                                        mix(mix(gray, c1, clamp(t * 3.0, 0.0, 1.0)),
+                                            c2, clamp((t - 0.33) * 3.0, 0.0, 1.0)),
+                                        c3, clamp((t - 0.66) * 3.0, 0.0, 1.0)
+                                    );
+
                                     sdf.box(0., 0., self.rect_size.x, self.rect_size.y, 4.0);
-                                    let bg_color = mix((BORDER), (GRAY_300), self.hover);
-                                    let bg_color = mix(bg_color, (TEXT_MUTED), self.pressed);
-                                    let bg_color = mix(bg_color, #22c55e, self.copied);
                                     sdf.fill(bg_color);
 
-                                    // Icon color - white when copied for contrast
-                                    let icon_color = mix((GRAY_600), #ffffff, self.copied);
+                                    // Icon color - white when active, gray otherwise
+                                    let icon_base = mix((GRAY_600), vec4(0.580, 0.639, 0.722, 1.0), self.dark_mode);
+                                    let icon_color = mix(icon_base, vec4(1.0, 1.0, 1.0, 1.0), smoothstep(0.0, 0.3, self.copied));
 
                                     // Clipboard icon - back rectangle
                                     sdf.box(c.x - 4.0, c.y - 2.0, 8.0, 9.0, 1.0);
@@ -991,18 +1039,6 @@ live_design! {
                                     sdf.stroke(icon_color, 1.2);
 
                                     return sdf.result;
-                                }
-                            }
-                            animator: {
-                                hover = {
-                                    default: off
-                                    off = { from: {all: Forward {duration: 0.1}} apply: {draw_bg: {hover: 0.0}} }
-                                    on = { from: {all: Forward {duration: 0.1}} apply: {draw_bg: {hover: 1.0}} }
-                                }
-                                pressed = {
-                                    default: off
-                                    off = { from: {all: Forward {duration: 0.05}} apply: {draw_bg: {pressed: 0.0}} }
-                                    on = { from: {all: Forward {duration: 0.02}} apply: {draw_bg: {pressed: 1.0}} }
                                 }
                             }
                         }
@@ -1032,21 +1068,21 @@ live_design! {
                                 instance dark_mode: 0.0
                                 text_style: <FONT_REGULAR>{ font_size: 10.0 }
                                 fn get_color(self) -> vec4 {
-                                    return mix((GRAY_600), (SLATE_300), self.dark_mode);
+                                    return mix((GRAY_600), (TEXT_PRIMARY_DARK), self.dark_mode);
                                 }
                             }
                             draw_bold: {
                                 instance dark_mode: 0.0
                                 text_style: <FONT_SEMIBOLD>{ font_size: 10.0 }
                                 fn get_color(self) -> vec4 {
-                                    return mix((GRAY_600), (SLATE_300), self.dark_mode);
+                                    return mix((GRAY_600), (TEXT_PRIMARY_DARK), self.dark_mode);
                                 }
                             }
                             draw_fixed: {
                                 instance dark_mode: 0.0
                                 text_style: <FONT_REGULAR>{ font_size: 9.0 }
                                 fn get_color(self) -> vec4 {
-                                    return mix((GRAY_600), (SLATE_300), self.dark_mode);
+                                    return mix((GRAY_600), (SLATE_400), self.dark_mode);
                                 }
                             }
                         }
@@ -1122,6 +1158,10 @@ pub struct MoFaFMScreen {
     aec_enabled: bool,
     // Note: AEC blink animation is now shader-driven (self.time), no timer needed
 
+    // Mic mute state
+    #[rust]
+    mic_muted: bool,
+
     // Dora integration
     #[rust]
     dora_integration: Option<DoraIntegration>,
@@ -1129,10 +1169,15 @@ pub struct MoFaFMScreen {
     dataflow_path: Option<PathBuf>,
     #[rust]
     dora_timer: Timer,
+    // NextFrame-based animation for copy buttons (smooth fade instead of timer reset)
     #[rust]
-    copy_chat_feedback_timer: Timer,
+    copy_chat_flash_active: bool,
     #[rust]
-    copy_log_feedback_timer: Timer,
+    copy_chat_flash_start: f64,  // Absolute start time
+    #[rust]
+    copy_log_flash_active: bool,
+    #[rust]
+    copy_log_flash_start: f64,   // Absolute start time
     #[rust]
     chat_messages: Vec<ChatMessageEntry>,
     #[rust]
@@ -1181,18 +1226,92 @@ impl Widget for MoFaFMScreen {
             self.poll_dora_events(cx);
         }
 
-        // Handle copy chat feedback timer - reset animation
-        if self.copy_chat_feedback_timer.is_event(event).is_some() {
-            self.view.button(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn))
-                .apply_over(cx, live!{ draw_bg: { copied: 0.0 } });
-            self.view.redraw(cx);
+        // Handle NextFrame for smooth copy button fade animation
+        if let Event::NextFrame(nf) = event {
+            let mut needs_redraw = false;
+            let current_time = nf.time;
+
+            // Copy chat button fade animation
+            if self.copy_chat_flash_active {
+                // Capture start time on first frame
+                if self.copy_chat_flash_start == 0.0 {
+                    self.copy_chat_flash_start = current_time;
+                }
+                let elapsed = current_time - self.copy_chat_flash_start;
+                // Hold at full brightness for 0.3s, then fade out over 0.5s
+                let fade_start = 0.3;
+                let fade_duration = 0.5;
+                let total_duration = fade_start + fade_duration;
+
+                if elapsed >= total_duration {
+                    // Animation complete
+                    self.copy_chat_flash_active = false;
+                    self.view.view(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn))
+                        .apply_over(cx, live!{ draw_bg: { copied: 0.0 } });
+                } else if elapsed >= fade_start {
+                    // Fade out phase - smoothstep interpolation
+                    let t = (elapsed - fade_start) / fade_duration;
+                    // Smoothstep: 3t² - 2t³ for smooth ease-out
+                    let smooth_t = t * t * (3.0 - 2.0 * t);
+                    let copied = 1.0 - smooth_t;
+                    self.view.view(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn))
+                        .apply_over(cx, live!{ draw_bg: { copied: (copied) } });
+                }
+                needs_redraw = true;
+                if self.copy_chat_flash_active {
+                    cx.new_next_frame();
+                }
+            }
+
+            // Copy log button fade animation
+            if self.copy_log_flash_active {
+                // Capture start time on first frame
+                if self.copy_log_flash_start == 0.0 {
+                    self.copy_log_flash_start = current_time;
+                }
+                let elapsed = current_time - self.copy_log_flash_start;
+                // Hold at full brightness for 0.3s, then fade out over 0.5s
+                let fade_start = 0.3;
+                let fade_duration = 0.5;
+                let total_duration = fade_start + fade_duration;
+
+                if elapsed >= total_duration {
+                    // Animation complete
+                    self.copy_log_flash_active = false;
+                    self.view.view(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn))
+                        .apply_over(cx, live!{ draw_bg: { copied: 0.0 } });
+                } else if elapsed >= fade_start {
+                    // Fade out phase - smoothstep interpolation
+                    let t = (elapsed - fade_start) / fade_duration;
+                    // Smoothstep: 3t² - 2t³ for smooth ease-out
+                    let smooth_t = t * t * (3.0 - 2.0 * t);
+                    let copied = 1.0 - smooth_t;
+                    self.view.view(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn))
+                        .apply_over(cx, live!{ draw_bg: { copied: (copied) } });
+                }
+                needs_redraw = true;
+                if self.copy_log_flash_active {
+                    cx.new_next_frame();
+                }
+            }
+
+            if needs_redraw {
+                self.view.redraw(cx);
+            }
         }
 
-        // Handle copy log feedback timer - reset animation
-        if self.copy_log_feedback_timer.is_event(event).is_some() {
-            self.view.button(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn))
-                .apply_over(cx, live!{ draw_bg: { copied: 0.0 } });
-            self.view.redraw(cx);
+        // Handle mic mute button click
+        let mic_btn = self.view.view(ids!(audio_container.mic_container.mic_group.mic_mute_btn));
+        match event.hits(cx, mic_btn.area()) {
+            Hit::FingerUp(_) => {
+                self.mic_muted = !self.mic_muted;
+                self.view.view(ids!(audio_container.mic_container.mic_group.mic_mute_btn.mic_icon_on))
+                    .set_visible(cx, !self.mic_muted);
+                self.view.view(ids!(audio_container.mic_container.mic_group.mic_mute_btn.mic_icon_off))
+                    .set_visible(cx, self.mic_muted);
+                self.view.redraw(cx);
+            }
+            _ => {}
         }
 
         // Handle AEC toggle button click
@@ -1280,26 +1399,36 @@ impl Widget for MoFaFMScreen {
             self.update_log_display(cx);
         }
 
-        // Handle copy log button
-        if self.view.button(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn)).clicked(actions) {
-            self.copy_logs_to_clipboard(cx);
-            // Trigger copied feedback animation
-            self.view.button(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn))
-                .apply_over(cx, live!{ draw_bg: { copied: 1.0 } });
-            self.view.redraw(cx);
-            // Start timer to reset animation after 1 second
-            self.copy_log_feedback_timer = cx.start_timeout(1.0);
+        // Handle copy log button (manual click detection since it's a View)
+        let copy_log_btn = self.view.view(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn));
+        match event.hits(cx, copy_log_btn.area()) {
+            Hit::FingerUp(_) => {
+                self.copy_logs_to_clipboard(cx);
+                // Trigger copied feedback animation with NextFrame-based smooth fade
+                self.view.view(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn))
+                    .apply_over(cx, live!{ draw_bg: { copied: 1.0 } });
+                self.copy_log_flash_active = true;
+                self.copy_log_flash_start = 0.0;  // Sentinel: capture actual time on first NextFrame
+                cx.new_next_frame();
+                self.view.redraw(cx);
+            }
+            _ => {}
         }
 
-        // Handle copy chat button
-        if self.view.button(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn)).clicked(actions) {
-            self.copy_chat_to_clipboard(cx);
-            // Trigger copied feedback animation
-            self.view.button(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn))
-                .apply_over(cx, live!{ draw_bg: { copied: 1.0 } });
-            self.view.redraw(cx);
-            // Start timer to reset animation after 1 second
-            self.copy_chat_feedback_timer = cx.start_timeout(1.0);
+        // Handle copy chat button (manual click detection since it's a View)
+        let copy_chat_btn = self.view.view(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn));
+        match event.hits(cx, copy_chat_btn.area()) {
+            Hit::FingerUp(_) => {
+                self.copy_chat_to_clipboard(cx);
+                // Trigger copied feedback animation with NextFrame-based smooth fade
+                self.view.view(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn))
+                    .apply_over(cx, live!{ draw_bg: { copied: 1.0 } });
+                self.copy_chat_flash_active = true;
+                self.copy_chat_flash_start = 0.0;  // Sentinel: capture actual time on first NextFrame
+                cx.new_next_frame();
+                self.view.redraw(cx);
+            }
+            _ => {}
         }
 
         // Handle log search text change
@@ -1355,10 +1484,18 @@ impl Widget for MoFaFMScreen {
 }
 
 impl MoFaFMScreenRef {
+    /// Update dark mode for this screen
+    /// Delegates to StateChangeListener::on_dark_mode_change for consistency
+    pub fn update_dark_mode(&self, cx: &mut Cx, dark_mode: f64) {
+        self.on_dark_mode_change(cx, dark_mode);
+    }
+}
+
+impl TimerControl for MoFaFMScreenRef {
     /// Stop audio and dora timers - call this before hiding/removing the widget
     /// to prevent timer callbacks on inactive state
     /// Note: AEC blink animation is shader-driven and doesn't need stopping
-    pub fn stop_timers(&self, cx: &mut Cx) {
+    fn stop_timers(&self, cx: &mut Cx) {
         if let Some(inner) = self.borrow_mut() {
             cx.stop_timer(inner.audio_timer);
             cx.stop_timer(inner.dora_timer);
@@ -1368,7 +1505,7 @@ impl MoFaFMScreenRef {
 
     /// Restart audio and dora timers - call this when the widget becomes visible again
     /// Note: AEC blink animation is shader-driven and auto-resumes
-    pub fn start_timers(&self, cx: &mut Cx) {
+    fn start_timers(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.audio_timer = cx.start_interval(0.05);  // 50ms for mic level
             inner.dora_timer = cx.start_interval(0.1);    // 100ms for dora events
@@ -1398,9 +1535,40 @@ impl StateChangeListener for MoFaFMScreenRef {
                 draw_text: { dark_mode: (dark_mode) }
             });
 
+            // Apply dark mode to copy chat button
+            inner.view.view(ids!(left_column.chat_container.chat_section.chat_header.copy_chat_btn)).apply_over(cx, live!{
+                draw_bg: { dark_mode: (dark_mode) }
+            });
+
+            // Apply dark mode to chat content Markdown
+            let chat_markdown = inner.view.markdown(ids!(left_column.chat_container.chat_section.chat_scroll.chat_content_wrapper.chat_content));
+            if dark_mode > 0.5 {
+                let light_color = vec4(0.945, 0.961, 0.976, 1.0); // TEXT_PRIMARY_DARK (#f1f5f9)
+                chat_markdown.apply_over(cx, live!{
+                    font_color: (light_color)
+                    draw_normal: { color: (light_color) }
+                    draw_bold: { color: (light_color) }
+                    draw_italic: { color: (light_color) }
+                    draw_fixed: { color: (vec4(0.580, 0.639, 0.722, 1.0)) } // SLATE_400 for code
+                });
+            } else {
+                let dark_color = vec4(0.122, 0.161, 0.216, 1.0); // TEXT_PRIMARY (#1f2937)
+                chat_markdown.apply_over(cx, live!{
+                    font_color: (dark_color)
+                    draw_normal: { color: (dark_color) }
+                    draw_bold: { color: (dark_color) }
+                    draw_italic: { color: (dark_color) }
+                    draw_fixed: { color: (vec4(0.420, 0.451, 0.502, 1.0)) } // GRAY_500 for code
+                });
+            }
+
             // Apply dark mode to audio control containers
             inner.view.view(ids!(left_column.audio_container.mic_container)).apply_over(cx, live!{
                 draw_bg: { dark_mode: (dark_mode) }
+            });
+            // Apply dark mode to mic icon
+            inner.view.icon(ids!(left_column.audio_container.mic_container.mic_group.mic_mute_btn.mic_icon_on.icon)).apply_over(cx, live!{
+                draw_icon: { dark_mode: (dark_mode) }
             });
             inner.view.view(ids!(left_column.audio_container.aec_container)).apply_over(cx, live!{
                 draw_bg: { dark_mode: (dark_mode) }
@@ -1463,15 +1631,19 @@ impl StateChangeListener for MoFaFMScreenRef {
                 draw_text: { dark_mode: (dark_mode) }
             });
 
+            // Apply dark mode to copy log button
+            inner.view.view(ids!(log_section.log_content_column.log_header.log_filter_row.copy_log_btn)).apply_over(cx, live!{
+                draw_bg: { dark_mode: (dark_mode) }
+            });
+
             // Apply dark mode to log content Markdown
-            // Use apply_over with font_color - this works because font_color is a top-level property
-            if dark_mode > 0.5 {
-                inner.view.markdown(ids!(log_section.log_content_column.log_scroll.log_content_wrapper.log_content))
-                    .apply_over(cx, live!{ font_color: (vec4(0.796, 0.835, 0.882, 1.0)) }); // SLATE_300
-            } else {
-                inner.view.markdown(ids!(log_section.log_content_column.log_scroll.log_content_wrapper.log_content))
-                    .apply_over(cx, live!{ font_color: (vec4(0.294, 0.333, 0.388, 1.0)) }); // GRAY_600
-            }
+            // Update dark_mode instance variable on each draw component (they have get_color shader functions)
+            let log_markdown = inner.view.markdown(ids!(log_section.log_content_column.log_scroll.log_content_wrapper.log_content));
+            log_markdown.apply_over(cx, live!{
+                draw_normal: { dark_mode: (dark_mode) }
+                draw_bold: { dark_mode: (dark_mode) }
+                draw_fixed: { dark_mode: (dark_mode) }
+            });
 
             inner.view.redraw(cx);
         }
