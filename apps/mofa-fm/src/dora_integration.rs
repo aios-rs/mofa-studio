@@ -6,35 +6,13 @@
 use crossbeam_channel::{Receiver, Sender, bounded};
 use mofa_dora_bridge::{
     controller::DataflowController,
-    data::{AudioData, ChatMessage, LogEntry},
     dispatcher::DynamicNodeDispatcher,
+    SharedDoraState,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use parking_lot::RwLock;
-
-// NOTE: ParticipantAudioData removed - LED visualization is calculated in screen.rs
-// from output waveform (more accurate since it reflects what's actually being played)
-
-/// State shared between the UI and dora bridges
-#[derive(Debug, Default)]
-pub struct DoraState {
-    /// Whether the dataflow is running
-    pub dataflow_running: bool,
-    /// Current dataflow ID
-    pub dataflow_id: Option<String>,
-    /// Connection states for each bridge
-    pub audio_player_connected: bool,
-    pub system_log_connected: bool,
-    pub prompt_input_connected: bool,
-    /// Audio buffer fill percentage
-    pub buffer_fill: f64,
-    /// Last received chat messages
-    pub pending_chat_messages: Vec<ChatMessage>,
-    /// Last received log entries
-    pub pending_log_entries: Vec<LogEntry>,
-}
 
 /// Commands sent from UI to dora integration
 #[derive(Debug, Clone)]
@@ -59,31 +37,25 @@ pub enum DoraCommand {
 }
 
 /// Events sent from dora integration to UI
+///
+/// Note: All data (chat, audio, logs, status) is now handled via SharedDoraState.
+/// DoraEvents are only used for control flow notifications.
 #[derive(Debug, Clone)]
 pub enum DoraEvent {
     /// Dataflow started
     DataflowStarted { dataflow_id: String },
     /// Dataflow stopped
     DataflowStopped,
-    /// Bridge connected
-    BridgeConnected { bridge_name: String },
-    /// Bridge disconnected
-    BridgeDisconnected { bridge_name: String },
-    /// Audio received
-    AudioReceived { data: AudioData },
-    // NOTE: ParticipantAudioReceived removed - LED visualization calculated in screen.rs from output waveform
-    /// Chat message received
-    ChatReceived { message: ChatMessage },
-    /// Log entry received
-    LogReceived { entry: LogEntry },
-    /// Error occurred
+    /// Critical error occurred
     Error { message: String },
 }
 
 /// Dora integration manager
 pub struct DoraIntegration {
-    /// Shared state
-    state: Arc<RwLock<DoraState>>,
+    /// Whether dataflow is currently running
+    running: Arc<AtomicBool>,
+    /// Shared state for direct Dora↔UI communication
+    shared_dora_state: Arc<SharedDoraState>,
     /// Command sender (UI -> dora thread)
     command_tx: Sender<DoraCommand>,
     /// Event receiver (dora thread -> UI)
@@ -101,16 +73,21 @@ impl DoraIntegration {
         let (event_tx, event_rx) = bounded(100);
         let (stop_tx, stop_rx) = bounded(1);
 
-        let state = Arc::new(RwLock::new(DoraState::default()));
-        let state_clone = Arc::clone(&state);
+        let running = Arc::new(AtomicBool::new(false));
+        let running_clone = Arc::clone(&running);
+
+        // Create shared state for direct Dora↔UI communication
+        let shared_dora_state = SharedDoraState::new();
+        let shared_dora_state_clone = Arc::clone(&shared_dora_state);
 
         // Spawn worker thread
         let handle = thread::spawn(move || {
-            Self::run_worker(state_clone, command_rx, event_tx, stop_rx);
+            Self::run_worker(running_clone, shared_dora_state_clone, command_rx, event_tx, stop_rx);
         });
 
         Self {
-            state,
+            running,
+            shared_dora_state,
             command_tx,
             event_rx,
             worker_handle: Some(handle),
@@ -118,9 +95,12 @@ impl DoraIntegration {
         }
     }
 
-    /// Get shared state reference
-    pub fn state(&self) -> &Arc<RwLock<DoraState>> {
-        &self.state
+    /// Get shared Dora state for direct UI polling
+    ///
+    /// This provides direct access to chat, audio, logs, and status
+    /// without going through the event channel.
+    pub fn shared_dora_state(&self) -> &Arc<SharedDoraState> {
+        &self.shared_dora_state
     }
 
     /// Send a command to the dora integration
@@ -189,12 +169,13 @@ impl DoraIntegration {
 
     /// Check if dataflow is running
     pub fn is_running(&self) -> bool {
-        self.state.read().dataflow_running
+        self.running.load(Ordering::Acquire)
     }
 
     /// Worker thread main loop
     fn run_worker(
-        state: Arc<RwLock<DoraState>>,
+        running: Arc<AtomicBool>,
+        shared_dora_state: Arc<SharedDoraState>,
         command_rx: Receiver<DoraCommand>,
         event_tx: Sender<DoraEvent>,
         stop_rx: Receiver<()>,
@@ -202,6 +183,7 @@ impl DoraIntegration {
         log::info!("Dora integration worker started");
 
         let mut dispatcher: Option<DynamicNodeDispatcher> = None;
+        let shared_state_for_dispatcher = shared_dora_state;
         let mut last_status_check = std::time::Instant::now();
         let status_check_interval = std::time::Duration::from_secs(2);
         let mut dataflow_start_time: Option<std::time::Instant> = None;
@@ -231,13 +213,16 @@ impl DoraIntegration {
                                 // Pass env vars to controller so they're explicitly added to dora start command
                                 controller.set_envs(env_vars.clone());
 
-                                let mut disp = DynamicNodeDispatcher::new(controller);
+                                // Create dispatcher with shared state for UI polling
+                                let mut disp = DynamicNodeDispatcher::with_shared_state(
+                                    controller,
+                                    Arc::clone(&shared_state_for_dispatcher),
+                                );
 
                                 match disp.start() {
                                     Ok(dataflow_id) => {
                                         log::info!("Dataflow started: {}", dataflow_id);
-                                        state.write().dataflow_running = true;
-                                        state.write().dataflow_id = Some(dataflow_id.clone());
+                                        running.store(true, Ordering::Release);
                                         dataflow_start_time = Some(std::time::Instant::now());
                                         let _ = event_tx.send(DoraEvent::DataflowStarted { dataflow_id });
                                         dispatcher = Some(disp);
@@ -266,8 +251,7 @@ impl DoraIntegration {
                                 log::error!("Failed to stop dataflow: {}", e);
                             }
                         }
-                        state.write().dataflow_running = false;
-                        state.write().dataflow_id = None;
+                        running.store(false, Ordering::Release);
                         dataflow_start_time = None;
                         let _ = event_tx.send(DoraEvent::DataflowStopped);
                     }
@@ -280,8 +264,7 @@ impl DoraIntegration {
                                 log::error!("Failed to stop dataflow: {}", e);
                             }
                         }
-                        state.write().dataflow_running = false;
-                        state.write().dataflow_id = None;
+                        running.store(false, Ordering::Release);
                         dataflow_start_time = None;
                         let _ = event_tx.send(DoraEvent::DataflowStopped);
                     }
@@ -293,8 +276,7 @@ impl DoraIntegration {
                                 log::error!("Failed to force stop dataflow: {}", e);
                             }
                         }
-                        state.write().dataflow_running = false;
-                        state.write().dataflow_id = None;
+                        running.store(false, Ordering::Release);
                         dataflow_start_time = None;
                         let _ = event_tx.send(DoraEvent::DataflowStopped);
                     }
@@ -327,7 +309,6 @@ impl DoraIntegration {
                     }
 
                     DoraCommand::UpdateBufferStatus { fill_percentage } => {
-                        state.write().buffer_fill = fill_percentage;
                         // Forward to audio player bridge for backpressure signaling to dora
                         if let Some(ref disp) = dispatcher {
                             if let Some(bridge) = disp.get_bridge("mofa-audio-player") {
@@ -356,14 +337,13 @@ impl DoraIntegration {
                     // Check if dataflow is still running via dora list
                     match disp.controller().read().get_status() {
                         Ok(status) => {
-                            let was_running = state.read().dataflow_running;
+                            let was_running = running.load(Ordering::Acquire);
                             let is_running = status.state.is_running();
 
                             if was_running && !is_running {
                                 // Dataflow stopped unexpectedly
                                 log::warn!("Dataflow stopped unexpectedly");
-                                state.write().dataflow_running = false;
-                                state.write().dataflow_id = None;
+                                running.store(false, Ordering::Release);
                                 dataflow_start_time = None;
                                 let _ = event_tx.send(DoraEvent::DataflowStopped);
                             }
@@ -375,61 +355,11 @@ impl DoraIntegration {
                 }
             }
 
-            // Poll bridge events
-            if let Some(ref disp) = dispatcher {
-                for (node_id, bridge_event) in disp.poll_events() {
-                    match bridge_event {
-                        mofa_dora_bridge::BridgeEvent::Connected => {
-                            log::info!("Bridge connected: {}", node_id);
-                            let _ = event_tx.send(DoraEvent::BridgeConnected {
-                                bridge_name: node_id.clone(),
-                            });
-                            // Update state based on bridge type
-                            match node_id.as_str() {
-                                "mofa-audio-player" => state.write().audio_player_connected = true,
-                                "mofa-system-log" => state.write().system_log_connected = true,
-                                "mofa-prompt-input" => state.write().prompt_input_connected = true,
-                                _ => {}
-                            }
-                        }
-                        mofa_dora_bridge::BridgeEvent::Disconnected => {
-                            log::info!("Bridge disconnected: {}", node_id);
-                            let _ = event_tx.send(DoraEvent::BridgeDisconnected {
-                                bridge_name: node_id.clone(),
-                            });
-                            match node_id.as_str() {
-                                "mofa-audio-player" => state.write().audio_player_connected = false,
-                                "mofa-system-log" => state.write().system_log_connected = false,
-                                "mofa-prompt-input" => state.write().prompt_input_connected = false,
-                                _ => {}
-                            }
-                        }
-                        mofa_dora_bridge::BridgeEvent::DataReceived { input_id, data, .. } => {
-                            match data {
-                                mofa_dora_bridge::DoraData::Audio(audio) => {
-                                    let _ = event_tx.send(DoraEvent::AudioReceived { data: audio });
-                                }
-                                mofa_dora_bridge::DoraData::Chat(chat) => {
-                                    state.write().pending_chat_messages.push(chat.clone());
-                                    let _ = event_tx.send(DoraEvent::ChatReceived { message: chat });
-                                }
-                                mofa_dora_bridge::DoraData::Log(entry) => {
-                                    state.write().pending_log_entries.push(entry.clone());
-                                    let _ = event_tx.send(DoraEvent::LogReceived { entry });
-                                }
-                                mofa_dora_bridge::DoraData::Json(json) => {
-                                    // JSON data from bridges (unused - LED visualization done in screen.rs)
-                                    log::debug!("Received JSON from {}: input_id={}, data={:?}", node_id, input_id, json);
-                                }
-                                _ => {}
-                            }
-                        }
-                        mofa_dora_bridge::BridgeEvent::Error(msg) => {
-                            log::error!("Bridge error: {}", msg);
-                            let _ = event_tx.send(DoraEvent::Error { message: msg });
-                        }
-                        _ => {}
-                    }
+            // Check SharedDoraState for critical errors (UI polls everything else directly)
+            if let Some(status) = shared_state_for_dispatcher.status.read_if_dirty() {
+                if let Some(error) = status.last_error {
+                    log::error!("Bridge error: {}", error);
+                    let _ = event_tx.send(DoraEvent::Error { message: error });
                 }
             }
 

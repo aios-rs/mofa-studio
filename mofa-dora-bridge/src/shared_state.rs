@@ -124,21 +124,24 @@ impl ChatState {
 
     /// Push message with automatic streaming consolidation
     ///
-    /// If message is streaming, updates existing streaming message from same sender/session.
+    /// If message is streaming, ACCUMULATES content to existing streaming message from same sender/session.
     /// If message is complete, finalizes any existing streaming message.
     pub fn push(&self, msg: ChatMessage) {
         let mut messages = self.messages.write();
 
         // Find existing streaming message from same sender + session
+        // IMPORTANT: Only match if BOTH have valid session_ids (not None)
+        // to prevent incorrectly merging messages from different participants
         let existing_idx = messages.iter().position(|m| {
             m.sender == msg.sender
-                && m.session_id == msg.session_id
                 && m.is_streaming
+                && m.session_id.is_some()
+                && m.session_id == msg.session_id
         });
 
         if let Some(idx) = existing_idx {
-            // Update existing message
-            messages[idx].content = msg.content;
+            // ACCUMULATE content for streaming messages (append, not replace)
+            messages[idx].content.push_str(&msg.content);
             if !msg.is_streaming {
                 // Finalize: mark as complete
                 messages[idx].is_streaming = false;
@@ -244,12 +247,6 @@ impl AudioState {
 /// Dora connection status
 #[derive(Debug, Clone, Default)]
 pub struct DoraStatus {
-    /// Whether connected to dora daemon
-    pub connected: bool,
-    /// Whether dataflow is running
-    pub dataflow_running: bool,
-    /// Currently active dataflow ID
-    pub dataflow_id: Option<String>,
     /// List of connected bridge node IDs
     pub active_bridges: Vec<String>,
     /// Last error message if any
@@ -305,21 +302,6 @@ impl SharedDoraState {
         self.audio.clear();
         self.logs.clear();
         self.status.set(DoraStatus::default());
-    }
-
-    /// Update connection status
-    pub fn set_connected(&self, connected: bool) {
-        let mut status = self.status.read();
-        status.connected = connected;
-        self.status.set(status);
-    }
-
-    /// Update dataflow running status
-    pub fn set_dataflow_running(&self, running: bool, dataflow_id: Option<String>) {
-        let mut status = self.status.read();
-        status.dataflow_running = running;
-        status.dataflow_id = dataflow_id;
-        self.status.set(status);
     }
 
     /// Add active bridge
@@ -393,7 +375,7 @@ mod tests {
     fn test_chat_streaming_consolidation() {
         let chat = ChatState::new(100);
 
-        // First streaming message
+        // First streaming chunk
         chat.push(ChatMessage {
             content: "Hello".to_string(),
             sender: "Bot".to_string(),
@@ -403,9 +385,9 @@ mod tests {
             session_id: Some("s1".to_string()),
         });
 
-        // Update streaming message
+        // Second streaming chunk - should ACCUMULATE, not replace
         chat.push(ChatMessage {
-            content: "Hello, world".to_string(),
+            content: ", world".to_string(),
             sender: "Bot".to_string(),
             role: MessageRole::Assistant,
             timestamp: 1001,
@@ -413,15 +395,15 @@ mod tests {
             session_id: Some("s1".to_string()),
         });
 
-        // Should still be one message
+        // Should still be one message with accumulated content
         let messages = chat.read_all();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "Hello, world");
+        assert_eq!(messages[0].content, "Hello, world"); // Accumulated!
         assert!(messages[0].is_streaming);
 
-        // Finalize
+        // Finalize with final chunk
         chat.push(ChatMessage {
-            content: "Hello, world!".to_string(),
+            content: "!".to_string(),
             sender: "Bot".to_string(),
             role: MessageRole::Assistant,
             timestamp: 1002,
@@ -431,8 +413,89 @@ mod tests {
 
         let messages = chat.read_all();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "Hello, world!");
+        assert_eq!(messages[0].content, "Hello, world!"); // Full accumulated content
         assert!(!messages[0].is_streaming);
+    }
+
+    #[test]
+    fn test_chat_multi_participant_isolation() {
+        let chat = ChatState::new(100);
+
+        // Two participants streaming concurrently with different session_ids
+        chat.push(ChatMessage {
+            content: "Hello from ".to_string(),
+            sender: "Tutor".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1000,
+            is_streaming: true,
+            session_id: Some("session_tutor".to_string()),
+        });
+
+        chat.push(ChatMessage {
+            content: "Hi from ".to_string(),
+            sender: "Student".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1001,
+            is_streaming: true,
+            session_id: Some("session_student".to_string()),
+        });
+
+        // Continue streaming - each should accumulate separately
+        chat.push(ChatMessage {
+            content: "tutor!".to_string(),
+            sender: "Tutor".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1002,
+            is_streaming: false,
+            session_id: Some("session_tutor".to_string()),
+        });
+
+        chat.push(ChatMessage {
+            content: "student!".to_string(),
+            sender: "Student".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1003,
+            is_streaming: false,
+            session_id: Some("session_student".to_string()),
+        });
+
+        // Should have 2 separate messages, properly accumulated
+        let messages = chat.read_all();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "Hello from tutor!");
+        assert_eq!(messages[0].sender, "Tutor");
+        assert_eq!(messages[1].content, "Hi from student!");
+        assert_eq!(messages[1].sender, "Student");
+    }
+
+    #[test]
+    fn test_chat_no_session_id_creates_new_message() {
+        let chat = ChatState::new(100);
+
+        // Messages without session_id should NOT be consolidated
+        chat.push(ChatMessage {
+            content: "First".to_string(),
+            sender: "Bot".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1000,
+            is_streaming: true,
+            session_id: None, // No session_id
+        });
+
+        chat.push(ChatMessage {
+            content: "Second".to_string(),
+            sender: "Bot".to_string(),
+            role: MessageRole::Assistant,
+            timestamp: 1001,
+            is_streaming: true,
+            session_id: None, // No session_id
+        });
+
+        // Should be 2 separate messages (not consolidated)
+        let messages = chat.read_all();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "First");
+        assert_eq!(messages[1].content, "Second");
     }
 
     #[test]

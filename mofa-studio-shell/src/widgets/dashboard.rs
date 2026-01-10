@@ -38,7 +38,7 @@ live_design! {
     use mofa_widgets::theme::TEXT_PRIMARY_DARK;
     use mofa_widgets::theme::TEXT_SECONDARY_DARK;
 
-    use mofa_fm::screen::MoFaFMScreen;
+    use mofa_fm::screen::design::MoFaFMScreen;
     use mofa_settings::screen::SettingsScreen;
     use crate::widgets::tabs::TabWidget;
     use crate::widgets::tabs::TabBar;

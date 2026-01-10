@@ -344,16 +344,16 @@ impl LiveRegister for App {
         makepad_widgets::live_design(cx);
         mofa_widgets::live_design(cx);
 
-        // Shell widgets (order matters - tabs before dashboard)
-        mofa_studio_shell::widgets::sidebar::live_design(cx);
-        mofa_studio_shell::widgets::tabs::live_design(cx);
-        mofa_studio_shell::widgets::dashboard::live_design(cx);
-
-        // Register apps via MofaApp trait
+        // Register apps via MofaApp trait BEFORE dashboard (dashboard uses app widgets)
         // Note: Widget types in live_design! macro still require compile-time imports
         // (Makepad constraint), but registration uses the standardized trait interface
         <MoFaFMApp as MofaApp>::live_design(cx);
         <MoFaSettingsApp as MofaApp>::live_design(cx);
+
+        // Shell widgets (order matters - tabs before dashboard, apps before dashboard)
+        mofa_studio_shell::widgets::sidebar::live_design(cx);
+        mofa_studio_shell::widgets::tabs::live_design(cx);
+        mofa_studio_shell::widgets::dashboard::live_design(cx);
     }
 }
 

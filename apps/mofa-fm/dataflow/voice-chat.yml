@@ -128,15 +128,15 @@ nodes:
     env:
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_OFFLINE: "1"
-      VOICE_NAME: "Doubao"
+      VOICE_NAME: "Zhao Daniu"
       PRIMESPEECH_MODEL_DIR: $HOME/.dora/models/primespeech
       TEXT_LANG: zh
       PROMPT_LANG: zh
       TOP_K: 5
       TOP_P: 1.0
       TEMPERATURE: 1.0
-      SPEED_FACTOR: 1.0
-      FRAGMENT_INTERVAL: "0.1"
+      SPEED_FACTOR: 1.1
+      FRAGMENT_INTERVAL: "0.2"
       USE_GPU: false
       NUM_THREADS: 4
       RETURN_FRAGMENT: "false"
@@ -159,7 +159,7 @@ nodes:
     env:
       TRANSFORMERS_OFFLINE: "1"
       HF_HUB_OFFLINE: "1"
-      VOICE_NAME: "Yang Mi"
+      VOICE_NAME: "Doubao"
       PRIMESPEECH_MODEL_DIR: $HOME/.dora/models/primespeech
       TEXT_LANG: zh
       PROMPT_LANG: zh

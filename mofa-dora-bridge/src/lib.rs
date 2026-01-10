@@ -34,7 +34,7 @@ pub mod shared_state;
 pub mod widgets;
 
 // Re-exports
-pub use bridge::{BridgeEvent, BridgeState, DoraBridge};
+pub use bridge::{BridgeState, DoraBridge};
 pub use controller::{DataflowController, DataflowState};
 pub use data::{AudioData, ChatMessage, ControlCommand, DoraData, LogEntry};
 pub use dispatcher::{DynamicNodeDispatcher, WidgetBinding};

@@ -6,7 +6,7 @@
 //! - Buffer status output back to dora
 //! - Participant audio levels for LED visualization (consolidated from participant_panel)
 
-use crate::bridge::{BridgeEvent, BridgeState, DoraBridge};
+use crate::bridge::{BridgeState, DoraBridge};
 use crate::data::{AudioData, DoraData, EventMetadata};
 use crate::error::{BridgeError, BridgeResult};
 use crate::shared_state::SharedDoraState;
@@ -26,17 +26,16 @@ use tracing::{debug, error, info, warn};
 // not what's being received (which may be buffered ahead of playback)
 
 /// Audio player bridge - receives audio from dora, provides to widget
+///
+/// Status updates (connected/disconnected/error) are communicated via SharedDoraState.
+/// Audio data is pushed directly to SharedDoraState.audio for UI consumption.
 pub struct AudioPlayerBridge {
     /// Node ID (e.g., "mofa-audio-player")
     node_id: String,
     /// Current state
     state: Arc<RwLock<BridgeState>>,
-    /// Shared state for direct UI communication (replaces channels)
+    /// Shared state for direct UI communication
     shared_state: Option<Arc<SharedDoraState>>,
-    /// Event sender to widget (for connection events)
-    event_sender: Sender<BridgeEvent>,
-    /// Event receiver for widget
-    event_receiver: Receiver<BridgeEvent>,
     /// Buffer status sender from widget
     buffer_status_sender: Sender<f64>,
     /// Buffer status receiver for dora
@@ -55,15 +54,12 @@ impl AudioPlayerBridge {
 
     /// Create a new audio player bridge with shared state
     pub fn with_shared_state(node_id: &str, shared_state: Option<Arc<SharedDoraState>>) -> Self {
-        let (event_tx, event_rx) = bounded(100);
         let (buffer_tx, buffer_rx) = bounded(10);
 
         Self {
             node_id: node_id.to_string(),
             state: Arc::new(RwLock::new(BridgeState::Disconnected)),
             shared_state,
-            event_sender: event_tx,
-            event_receiver: event_rx,
             buffer_status_sender: buffer_tx,
             buffer_status_receiver: buffer_rx,
             stop_sender: None,
@@ -83,7 +79,6 @@ impl AudioPlayerBridge {
         node_id: String,
         state: Arc<RwLock<BridgeState>>,
         shared_state: Option<Arc<SharedDoraState>>,
-        event_sender: Sender<BridgeEvent>,
         buffer_status_receiver: Receiver<f64>,
         stop_receiver: Receiver<()>,
     ) {
@@ -96,7 +91,6 @@ impl AudioPlayerBridge {
                 Err(e) => {
                     error!("Failed to init dora node {}: {}", node_id, e);
                     *state.write() = BridgeState::Error;
-                    let _ = event_sender.send(BridgeEvent::Error(format!("Init failed: {}", e)));
                     if let Some(ref ss) = shared_state {
                         ss.set_error(Some(format!("Init failed: {}", e)));
                     }
@@ -105,7 +99,6 @@ impl AudioPlayerBridge {
             };
 
         *state.write() = BridgeState::Connected;
-        let _ = event_sender.send(BridgeEvent::Connected);
         if let Some(ref ss) = shared_state {
             ss.add_bridge(node_id.clone());
         }
@@ -146,7 +139,6 @@ impl AudioPlayerBridge {
                         event,
                         &mut node,
                         shared_state.as_ref(),
-                        &event_sender,
                         &mut session_start_sent_for,
                         &mut active_participant,
                         &mut active_switch_for,
@@ -159,7 +151,6 @@ impl AudioPlayerBridge {
         }
 
         *state.write() = BridgeState::Disconnected;
-        let _ = event_sender.send(BridgeEvent::Disconnected);
         if let Some(ref ss) = shared_state {
             ss.remove_bridge(&node_id);
         }
@@ -171,7 +162,6 @@ impl AudioPlayerBridge {
         event: Event,
         node: &mut DoraNode,
         shared_state: Option<&Arc<SharedDoraState>>,
-        event_sender: &Sender<BridgeEvent>,
         session_start_sent_for: &mut std::collections::HashSet<String>,
         active_participant: &mut Option<String>,
         active_switch_for: &mut std::collections::HashSet<String>,
@@ -278,18 +268,11 @@ impl AudioPlayerBridge {
                             audio_data_with_participant.question_id = Some(qid.to_string());
                         }
 
-                        // Use shared state if available (new architecture)
+                        // Push audio to SharedDoraState for UI consumption
                         // AudioState.push() uses a ring buffer internally
                         if let Some(ss) = shared_state {
                             ss.audio.push(audio_data_with_participant.clone());
                         }
-
-                        // Also send via event channel for backward compatibility
-                        let _ = event_sender.try_send(BridgeEvent::DataReceived {
-                            input_id: input_id.to_string(),
-                            data: DoraData::Audio(audio_data_with_participant),
-                            metadata: event_meta.clone(),
-                        });
 
                         // Send audio_complete signal back to text-segmenter
                         // This allows the next segment to be released
@@ -569,7 +552,6 @@ impl DoraBridge for AudioPlayerBridge {
         let node_id = self.node_id.clone();
         let state = Arc::clone(&self.state);
         let shared_state = self.shared_state.clone();
-        let event_sender = self.event_sender.clone();
         let buffer_receiver = self.buffer_status_receiver.clone();
 
         let handle = thread::spawn(move || {
@@ -577,7 +559,6 @@ impl DoraBridge for AudioPlayerBridge {
                 node_id,
                 state,
                 shared_state,
-                event_sender,
                 buffer_receiver,
                 stop_rx,
             );
@@ -623,10 +604,6 @@ impl DoraBridge for AudioPlayerBridge {
         }
 
         Ok(())
-    }
-
-    fn subscribe(&self) -> Receiver<BridgeEvent> {
-        self.event_receiver.clone()
     }
 
     fn expected_inputs(&self) -> Vec<String> {

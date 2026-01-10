@@ -5,7 +5,7 @@
 //! - Text responses (streaming)
 //! - Status updates
 
-use crate::bridge::{BridgeEvent, BridgeState, DoraBridge};
+use crate::bridge::{BridgeState, DoraBridge};
 use crate::data::{ChatMessage, ControlCommand, DoraData, EventMetadata, MessageRole};
 use crate::error::{BridgeError, BridgeResult};
 use crate::shared_state::SharedDoraState;
@@ -21,17 +21,16 @@ use std::thread;
 use tracing::{error, info, warn};
 
 /// Prompt input bridge - sends prompts to dora, receives responses
+///
+/// Status updates (connected/disconnected/error) are communicated via SharedDoraState.
+/// Chat messages are pushed directly to SharedDoraState.chat for UI consumption.
 pub struct PromptInputBridge {
     /// Node ID (e.g., "mofa-prompt-input")
     node_id: String,
     /// Current state
     state: Arc<RwLock<BridgeState>>,
-    /// Shared state for direct UI communication (replaces channels)
+    /// Shared state for direct UI communication
     shared_state: Option<Arc<SharedDoraState>>,
-    /// Event sender to widget (for connection events)
-    event_sender: Sender<BridgeEvent>,
-    /// Event receiver for widget
-    event_receiver: Receiver<BridgeEvent>,
     /// Prompt sender from widget
     prompt_sender: Sender<String>,
     /// Prompt receiver for dora
@@ -54,7 +53,6 @@ impl PromptInputBridge {
 
     /// Create a new prompt input bridge with shared state
     pub fn with_shared_state(node_id: &str, shared_state: Option<Arc<SharedDoraState>>) -> Self {
-        let (event_tx, event_rx) = bounded(1000);
         let (prompt_tx, prompt_rx) = bounded(10);
         let (control_tx, control_rx) = bounded(10);
 
@@ -62,8 +60,6 @@ impl PromptInputBridge {
             node_id: node_id.to_string(),
             state: Arc::new(RwLock::new(BridgeState::Disconnected)),
             shared_state,
-            event_sender: event_tx,
-            event_receiver: event_rx,
             prompt_sender: prompt_tx,
             prompt_receiver: prompt_rx,
             control_sender: control_tx,
@@ -92,7 +88,6 @@ impl PromptInputBridge {
         node_id: String,
         state: Arc<RwLock<BridgeState>>,
         shared_state: Option<Arc<SharedDoraState>>,
-        event_sender: Sender<BridgeEvent>,
         prompt_receiver: Receiver<String>,
         control_receiver: Receiver<ControlCommand>,
         stop_receiver: Receiver<()>,
@@ -106,7 +101,6 @@ impl PromptInputBridge {
                 Err(e) => {
                     error!("Failed to init dora node {}: {}", node_id, e);
                     *state.write() = BridgeState::Error;
-                    let _ = event_sender.send(BridgeEvent::Error(format!("Init failed: {}", e)));
                     if let Some(ref ss) = shared_state {
                         ss.set_error(Some(format!("Init failed: {}", e)));
                     }
@@ -115,7 +109,6 @@ impl PromptInputBridge {
             };
 
         *state.write() = BridgeState::Connected;
-        let _ = event_sender.send(BridgeEvent::Connected);
         if let Some(ref ss) = shared_state {
             ss.add_bridge(node_id.clone());
         }
@@ -145,11 +138,7 @@ impl PromptInputBridge {
             // Receive dora events with timeout
             match events.recv_timeout(std::time::Duration::from_millis(100)) {
                 Some(event) => {
-                    Self::handle_dora_event(
-                        event,
-                        shared_state.as_ref(),
-                        &event_sender,
-                    );
+                    Self::handle_dora_event(event, shared_state.as_ref());
                 }
                 None => {
                     // Timeout or no event, continue
@@ -158,7 +147,6 @@ impl PromptInputBridge {
         }
 
         *state.write() = BridgeState::Disconnected;
-        let _ = event_sender.send(BridgeEvent::Disconnected);
         if let Some(ref ss) = shared_state {
             ss.remove_bridge(&node_id);
         }
@@ -166,11 +154,7 @@ impl PromptInputBridge {
     }
 
     /// Handle a dora event
-    fn handle_dora_event(
-        event: Event,
-        shared_state: Option<&Arc<SharedDoraState>>,
-        event_sender: &Sender<BridgeEvent>,
-    ) {
+    fn handle_dora_event(event: Event, shared_state: Option<&Arc<SharedDoraState>>) {
         match event {
             Event::Input { id, data, metadata } => {
                 let input_id = id.as_str();
@@ -215,19 +199,10 @@ impl PromptInputBridge {
                             session_id: Some(session_id),
                         };
 
-                        // Use shared state if available (new architecture)
+                        // Push chat message to SharedDoraState for UI consumption
                         // ChatState.push() handles streaming consolidation internally
                         if let Some(ss) = shared_state {
-                            ss.chat.push(msg.clone());
-                        }
-
-                        // Also send via event channel for backward compatibility
-                        if let Err(e) = event_sender.try_send(BridgeEvent::DataReceived {
-                            input_id: input_id.to_string(),
-                            data: DoraData::Chat(msg),
-                            metadata: event_meta,
-                        }) {
-                            warn!("Event channel full, dropping event: {}", e);
+                            ss.chat.push(msg);
                         }
                     }
                 }
@@ -334,7 +309,6 @@ impl DoraBridge for PromptInputBridge {
         let node_id = self.node_id.clone();
         let state = Arc::clone(&self.state);
         let shared_state = self.shared_state.clone();
-        let event_sender = self.event_sender.clone();
         let prompt_receiver = self.prompt_receiver.clone();
         let control_receiver = self.control_receiver.clone();
 
@@ -343,7 +317,6 @@ impl DoraBridge for PromptInputBridge {
                 node_id,
                 state,
                 shared_state,
-                event_sender,
                 prompt_receiver,
                 control_receiver,
                 stop_rx,
@@ -395,10 +368,6 @@ impl DoraBridge for PromptInputBridge {
         }
 
         Ok(())
-    }
-
-    fn subscribe(&self) -> Receiver<BridgeEvent> {
-        self.event_receiver.clone()
     }
 
     fn expected_inputs(&self) -> Vec<String> {

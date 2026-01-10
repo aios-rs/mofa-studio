@@ -1,7 +1,7 @@
 //! MofaHero Widget - System status bar with Dataflow, Audio Buffer, CPU, and Memory panels
 
 use makepad_widgets::*;
-use sysinfo::System;
+use crate::system_monitor;
 
 live_design! {
     use link::theme::*;
@@ -433,10 +433,10 @@ pub struct MofaHero {
     connection_status: ConnectionStatus,
 
     #[rust]
-    sys: Option<System>,
+    timer: Timer,
 
     #[rust]
-    timer: Timer,
+    monitor_started: bool,
 
     #[rust]
     blink_phase: f64,  // For blinking animation
@@ -457,10 +457,11 @@ impl Widget for MofaHero {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         self.view.handle_event(cx, event, scope);
 
-        // Initialize system info on first event
-        if self.sys.is_none() {
-            self.sys = Some(System::new_all());
-            // Start timer for periodic updates (every 1 second)
+        // Start background system monitor on first event
+        if !self.monitor_started {
+            system_monitor::start_system_monitor();
+            self.monitor_started = true;
+            // Start timer for periodic UI updates (every 1 second)
             self.timer = cx.start_interval(1.0);
         }
 
@@ -507,29 +508,13 @@ impl Widget for MofaHero {
 }
 
 impl MofaHero {
-    /// Update system stats from sysinfo
+    /// Update system stats from background monitor
     fn update_system_stats(&mut self, cx: &mut Cx) {
-        // Get values from sys first to avoid borrow issues
-        let (cpu_usage, memory_usage) = if let Some(ref mut sys) = self.sys {
-            sys.refresh_cpu_usage();
-            sys.refresh_memory();
+        // Read values from background system monitor
+        let cpu_usage = system_monitor::get_cpu_usage();
+        let memory_usage = system_monitor::get_memory_usage();
 
-            let cpu = sys.global_cpu_usage() as f64 / 100.0;
-
-            let total_memory = sys.total_memory() as f64;
-            let used_memory = sys.used_memory() as f64;
-            let memory = if total_memory > 0.0 {
-                used_memory / total_memory
-            } else {
-                0.0
-            };
-
-            (cpu, memory)
-        } else {
-            return;
-        };
-
-        // Now update UI with the values
+        // Update UI with the values
         self.set_cpu_usage_internal(cx, cpu_usage);
         self.set_memory_usage_internal(cx, memory_usage);
     }

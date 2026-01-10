@@ -6,12 +6,13 @@ pub mod audio;
 pub mod audio_player;
 pub mod dora_integration;
 pub mod log_bridge;
+pub mod system_monitor;
 
 pub use screen::MoFaFMScreen;
 pub use screen::MoFaFMScreenWidgetRefExt;  // Export WidgetRefExt for timer control
 pub use mofa_hero::{MofaHero, MofaHeroAction, ConnectionStatus};
 pub use audio::AudioManager;
-pub use dora_integration::{DoraIntegration, DoraCommand, DoraEvent, DoraState};
+pub use dora_integration::{DoraIntegration, DoraCommand, DoraEvent};
 
 use makepad_widgets::Cx;
 use mofa_widgets::{MofaApp, AppInfo};

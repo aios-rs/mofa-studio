@@ -60,9 +60,8 @@ impl MoFaFMScreen {
             }
         }
 
-        // Clear chat messages and pending streaming messages
+        // Clear chat messages
         self.chat_messages.clear();
-        self.pending_streaming_messages.clear();
         self.update_chat_display(cx);
 
         // Clear prompt input
@@ -79,15 +78,10 @@ impl MoFaFMScreen {
 
     /// Update chat display with current messages
     pub(super) fn update_chat_display(&mut self, cx: &mut Cx) {
-        // Combine finalized messages with pending streaming messages
-        let all_messages: Vec<&ChatMessageEntry> = self.chat_messages.iter()
-            .chain(self.pending_streaming_messages.iter())
-            .collect();
-
-        let chat_text = if all_messages.is_empty() {
+        let chat_text = if self.chat_messages.is_empty() {
             "Waiting for conversation...".to_string()
         } else {
-            all_messages.into_iter()
+            self.chat_messages.iter()
                 .map(|msg| {
                     let timestamp = Self::format_timestamp(msg.timestamp);
                     let streaming_indicator = if msg.is_streaming { " ⌛" } else { "" };
@@ -97,17 +91,16 @@ impl MoFaFMScreen {
                 .join("\n\n---\n\n")
         };
 
-        ::log::debug!("[Chat] update_display: text_len={}, finalized={}, pending={}",
+        ::log::debug!("[Chat] update_display: text_len={}, messages={}",
             chat_text.len(),
-            self.chat_messages.len(),
-            self.pending_streaming_messages.len()
+            self.chat_messages.len()
         );
 
         self.view.markdown(ids!(left_column.chat_container.chat_section.chat_scroll.chat_content_wrapper.chat_content))
             .set_text(cx, &chat_text);
 
         // Auto-scroll to bottom when new messages arrive
-        let chat_count = self.chat_messages.len() + self.pending_streaming_messages.len();
+        let chat_count = self.chat_messages.len();
         if chat_count > self.last_chat_count {
             self.view.view(ids!(left_column.chat_container.chat_section.chat_scroll))
                 .set_scroll_pos(cx, DVec2 { x: 0.0, y: 1e10 });

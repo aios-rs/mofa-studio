@@ -4,13 +4,13 @@
 //! dora dynamic nodes. Each widget type has its own bridge that
 //! connects as a separate dynamic node.
 
-use crate::bridge::{BridgeEvent, BridgeState, DoraBridge};
+use crate::bridge::{BridgeState, DoraBridge};
 use crate::controller::DataflowController;
 use crate::error::{BridgeError, BridgeResult};
 use crate::parser::MofaNodeSpec;
+use crate::shared_state::SharedDoraState;
 use crate::widgets::{AudioPlayerBridge, PromptInputBridge, SystemLogBridge};
 use crate::MofaNodeType;
-use crossbeam_channel::Receiver;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,31 +30,50 @@ pub struct WidgetBinding {
 }
 
 /// Dispatcher for managing dynamic node connections
+///
+/// Status updates and data are now communicated via SharedDoraState
+/// instead of event channels.
 pub struct DynamicNodeDispatcher {
     /// Dataflow controller
     controller: Arc<RwLock<DataflowController>>,
+    /// Shared state for Dora↔UI communication
+    shared_state: Arc<SharedDoraState>,
     /// Active bridges indexed by node ID
     bridges: HashMap<String, Box<dyn DoraBridge>>,
     /// Widget bindings
     bindings: Vec<WidgetBinding>,
-    /// Event receivers for each bridge
-    event_receivers: HashMap<String, Receiver<BridgeEvent>>,
 }
 
 impl DynamicNodeDispatcher {
     /// Create a new dispatcher with a dataflow controller
     pub fn new(controller: DataflowController) -> Self {
+        Self::with_shared_state(controller, SharedDoraState::new())
+    }
+
+    /// Create a new dispatcher with an external shared state
+    ///
+    /// This allows the caller to hold a reference to the shared state
+    /// for direct UI polling without going through channels.
+    pub fn with_shared_state(
+        controller: DataflowController,
+        shared_state: Arc<SharedDoraState>,
+    ) -> Self {
         Self {
             controller: Arc::new(RwLock::new(controller)),
+            shared_state,
             bridges: HashMap::new(),
             bindings: Vec::new(),
-            event_receivers: HashMap::new(),
         }
     }
 
     /// Get the dataflow controller
     pub fn controller(&self) -> &Arc<RwLock<DataflowController>> {
         &self.controller
+    }
+
+    /// Get the shared state for Dora↔UI communication
+    pub fn shared_state(&self) -> &Arc<SharedDoraState> {
+        &self.shared_state
     }
 
     /// Discover MoFA nodes from the parsed dataflow
@@ -69,12 +88,19 @@ impl DynamicNodeDispatcher {
     /// Create bridges for all discovered MoFA nodes
     pub fn create_bridges(&mut self) -> BridgeResult<()> {
         let mofa_nodes = self.discover_mofa_nodes();
+        let shared_state = Some(self.shared_state.clone());
 
         for node_spec in mofa_nodes {
             let bridge: Box<dyn DoraBridge> = match node_spec.node_type {
-                MofaNodeType::AudioPlayer => Box::new(AudioPlayerBridge::new(&node_spec.id)),
-                MofaNodeType::SystemLog => Box::new(SystemLogBridge::new(&node_spec.id)),
-                MofaNodeType::PromptInput => Box::new(PromptInputBridge::new(&node_spec.id)),
+                MofaNodeType::AudioPlayer => {
+                    Box::new(AudioPlayerBridge::with_shared_state(&node_spec.id, shared_state.clone()))
+                }
+                MofaNodeType::SystemLog => {
+                    Box::new(SystemLogBridge::with_shared_state(&node_spec.id, shared_state.clone()))
+                }
+                MofaNodeType::PromptInput => {
+                    Box::new(PromptInputBridge::with_shared_state(&node_spec.id, shared_state.clone()))
+                }
                 MofaNodeType::MicInput => {
                     // TODO: Implement MicInputBridge
                     continue;
@@ -91,9 +117,6 @@ impl DynamicNodeDispatcher {
                 }
             };
 
-            let receiver = bridge.subscribe();
-            self.event_receivers.insert(node_spec.id.clone(), receiver);
-
             self.bindings.push(WidgetBinding {
                 widget_id: node_spec.id.clone(),
                 node_type: node_spec.node_type,
@@ -104,7 +127,7 @@ impl DynamicNodeDispatcher {
             self.bridges.insert(node_spec.id, bridge);
         }
 
-        info!("Created {} bridges", self.bridges.len());
+        info!("Created {} bridges with shared state", self.bridges.len());
         Ok(())
     }
 
@@ -179,11 +202,6 @@ impl DynamicNodeDispatcher {
     /// Get a mutable bridge by node ID
     pub fn get_bridge_mut(&mut self, node_id: &str) -> Option<&mut Box<dyn DoraBridge>> {
         self.bridges.get_mut(node_id)
-    }
-
-    /// Get event receiver for a bridge
-    pub fn get_event_receiver(&self, node_id: &str) -> Option<&Receiver<BridgeEvent>> {
-        self.event_receivers.get(node_id)
     }
 
     /// Get all bindings
@@ -295,19 +313,6 @@ impl DynamicNodeDispatcher {
     /// Check if the dispatcher is running
     pub fn is_running(&self) -> bool {
         self.controller.read().state().is_running()
-    }
-
-    /// Poll for events from all bridges (non-blocking)
-    pub fn poll_events(&self) -> Vec<(String, BridgeEvent)> {
-        let mut events = Vec::new();
-
-        for (node_id, receiver) in &self.event_receivers {
-            while let Ok(event) = receiver.try_recv() {
-                events.push((node_id.clone(), event));
-            }
-        }
-
-        events
     }
 }
 
