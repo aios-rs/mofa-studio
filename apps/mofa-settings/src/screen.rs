@@ -194,7 +194,7 @@ impl SettingsScreen {
                         _ => provider_id.as_str(),
                     };
                     let url = match provider_id.as_str() {
-                        "openai" => "https://api.openai.com/v1",
+                        "openai" => "https://api.siliconflow.cn/v1",
                         "deepseek" => "https://api.deepseek.com",
                         "alibaba_cloud" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
                         _ => "",
@@ -210,7 +210,7 @@ impl SettingsScreen {
                     _ => provider_id.as_str(),
                 };
                 let url = match provider_id.as_str() {
-                    "openai" => "https://api.openai.com/v1",
+                    "openai" => "https://api.siliconflow.cn/v1",
                     "deepseek" => "https://api.deepseek.com",
                     "alibaba_cloud" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
                     _ => "",

@@ -1,7 +1,7 @@
 # MaaS Client Configuration for MoFA FM Voice Chat
 # Simple configuration for basic voice chat functionality
 
-default_model = "gpt-4o-mini"
+default_model = "siliconflow"
 system_prompt = """You are a helpful AI assistant. Respond concisely and naturally for voice conversation."""
 
 max_history_exchanges = 20
@@ -51,3 +51,7 @@ route = { provider = "deepseek", model = "deepseek-chat" }
 [[models]]
 id = "deepseek-reasoner"
 route = { provider = "deepseek", model = "deepseek-reasoner" }
+
+[[models]]
+id = "siliconflow"
+route = { provider = "openai", model = "Qwen/Qwen3-8B" }

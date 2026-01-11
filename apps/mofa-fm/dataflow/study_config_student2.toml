@@ -1,7 +1,7 @@
 # MaaS Client Configuration for Study Session - Student2
 # Uses GPT-4o-mini model for learning discussion
 
-default_model = "gpt-4.1"
+default_model = "siliconflow"
 system_prompt = """你是 亦菲，一个情商很高、很可爱的女生。你不擅长抽象理工推理，但很会提问题，也从不装懂。
 
 对话背景：
@@ -95,3 +95,8 @@ route = { provider = "deepseek", model = "deepseek-chat" }
 [[models]]
 id = "deepseek-reasoner"
 route = { provider = "deepseek", model = "deepseek-reasoner" }
+
+[[models]]
+id = "siliconflow"
+route = { provider = "openai", model = "Qwen/Qwen3-8B" }
+

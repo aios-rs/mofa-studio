@@ -55,7 +55,7 @@ fn test_with_client(client: &reqwest::Client) {
     println!("  Body size: {} bytes", body_bytes.len());
 
     let request = client
-        .post("https://api.openai.com/v1/chat/completions")
+        .post("https://api.siliconflow.cn/v1/chat/completions")
         .header("Authorization", "Bearer test-key")
         .header("Content-Type", "application/json")
         .body(body_bytes);

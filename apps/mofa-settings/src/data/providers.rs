@@ -125,7 +125,7 @@ pub fn get_supported_providers() -> Vec<Provider> {
         Provider {
             id: "openai".to_string(),
             name: "OpenAI".to_string(),
-            url: "https://api.openai.com/v1".to_string(),
+            url: "https://api.siliconflow.cn/v1".to_string(),
             api_key: None,
             provider_type: ProviderType::OpenAi,
             enabled: false,

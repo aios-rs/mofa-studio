@@ -11,10 +11,10 @@ async fn main() -> Result<()> {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     eprintln!("API key length: {}", api_key.len());
 
-    let url = "https://api.openai.com/v1/chat/completions".to_string();
+    let url = "https://api.siliconflow.cn/v1/chat/completions".to_string();
 
     let request_body = serde_json::json!({
-        "model": "gpt-4o-mini",
+        "model": "Qwen/Qwen3-8B",
         "messages": [
             {"role": "system", "content": "You are a helpful assistant. Be brief."},
             {"role": "user", "content": "What is 2+2? Answer in one word."}

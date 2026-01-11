@@ -18,7 +18,7 @@ use dora_node_api::{
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, info_span, instrument, warn, Level};
 
 /// Prompt input bridge - sends prompts to dora, receives responses
 ///
@@ -123,15 +123,31 @@ impl PromptInputBridge {
 
             // Check for prompts to send
             while let Ok(prompt) = prompt_receiver.try_recv() {
-                if let Err(e) = Self::send_prompt_to_dora(&mut node, &prompt) {
-                    warn!("Failed to send prompt: {}", e);
+                let span = info_span!("process_prompt", node_id = %node_id, prompt_len = prompt.len());
+                let _enter = span.enter();
+                debug!("Received prompt from channel");
+                match Self::send_prompt_to_dora(&mut node, &prompt) {
+                    Ok(()) => {
+                        info!("Prompt sent to dora successfully");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to send prompt to dora");
+                    }
                 }
             }
 
             // Check for control commands to send
             while let Ok(cmd) = control_receiver.try_recv() {
-                if let Err(e) = Self::send_control_to_dora(&mut node, &cmd) {
-                    warn!("Failed to send control: {}", e);
+                let span = info_span!("process_control", node_id = %node_id, command = %cmd.command);
+                let _enter = span.enter();
+                debug!("Received control command from channel");
+                match Self::send_control_to_dora(&mut node, &cmd) {
+                    Ok(()) => {
+                        info!("Control command sent to dora successfully");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to send control to dora");
+                    }
                 }
             }
 
@@ -263,27 +279,51 @@ impl PromptInputBridge {
     /// Send prompt to dora via control output
     /// The conference-controller expects JSON with "prompt" field
     fn send_prompt_to_dora(node: &mut DoraNode, prompt: &str) -> BridgeResult<()> {
+        let span = info_span!("send_prompt_to_dora", prompt_len = prompt.len());
+        let _enter = span.enter();
+
         // Create JSON payload that conference-controller expects
         let payload = serde_json::json!({
             "prompt": prompt
         });
 
-        info!("Sending prompt to dora: {}", prompt);
+        debug!("Creating arrow data from JSON payload");
         let data = payload.to_string().into_arrow();
         let output_id: DataId = "control".to_string().into(); // Use control output
+
+        debug!("Sending output to dora node");
         node.send_output(output_id, Default::default(), data)
-            .map_err(|e| BridgeError::SendFailed(e.to_string()))
+            .map_err(|e| {
+                error!(error = %e, "node.send_output failed");
+                BridgeError::SendFailed(e.to_string())
+            })?;
+        info!("Prompt sent to dora node successfully");
+        Ok(())
     }
 
     /// Send control command to dora
     fn send_control_to_dora(node: &mut DoraNode, cmd: &ControlCommand) -> BridgeResult<()> {
+        let span = info_span!("send_control_to_dora", command = %cmd.command);
+        let _enter = span.enter();
+
+        debug!("Serializing control command to JSON");
         let payload =
-            serde_json::to_string(cmd).map_err(|e| BridgeError::SendFailed(e.to_string()))?;
+            serde_json::to_string(cmd).map_err(|e| {
+                error!(error = %e, "Failed to serialize control command");
+                BridgeError::SendFailed(e.to_string())
+            })?;
 
         let data = payload.into_arrow();
         let output_id: DataId = "control".to_string().into();
+
+        debug!("Sending control output to dora node");
         node.send_output(output_id, Default::default(), data)
-            .map_err(|e| BridgeError::SendFailed(e.to_string()))
+            .map_err(|e| {
+                error!(error = %e, "node.send_output for control failed");
+                BridgeError::SendFailed(e.to_string())
+            })?;
+        info!("Control command sent to dora node successfully");
+        Ok(())
     }
 }
 
@@ -352,18 +392,27 @@ impl DoraBridge for PromptInputBridge {
         match (output_id, data) {
             // Prompts are sent via the prompt channel, which sends to "control" output as JSON
             ("prompt", DoraData::Text(text)) | ("control", DoraData::Text(text)) => {
-                info!("Queuing prompt for sending: {}", text);
+                let span = info_span!("DoraBridge::send", node_id = %self.node_id, output_id = %output_id, data_type = "text", text_len = text.len());
+                let _enter = span.enter();
+                debug!("Queuing prompt for sending");
                 self.prompt_sender
                     .send(text)
                     .map_err(|_| BridgeError::ChannelSendError)?;
+                info!("Prompt queued to channel successfully");
             }
             ("control", DoraData::Control(cmd)) => {
+                let span = info_span!("DoraBridge::send", node_id = %self.node_id, output_id = %output_id, data_type = "control", command = %cmd.command);
+                let _enter = span.enter();
+                debug!("Queuing control command for sending");
                 self.control_sender
                     .send(cmd)
                     .map_err(|_| BridgeError::ChannelSendError)?;
+                info!("Control command queued to channel successfully");
             }
             _ => {
-                warn!("Unknown output: {}", output_id);
+                let span = info_span!("DoraBridge::send", node_id = %self.node_id, output_id = %output_id, data_type = "unknown");
+                let _enter = span.enter();
+                warn!("Unknown output type");
             }
         }
 

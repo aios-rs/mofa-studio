@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use tracing::{error, info, info_span, warn};
 
 /// Commands sent from UI to dora integration
 #[derive(Debug, Clone)]
@@ -290,34 +291,48 @@ impl DoraIntegration {
                     }
 
                     DoraCommand::SendPrompt { message } => {
+                        let span = info_span!("SendPrompt", message_len = message.len());
                         if let Some(ref disp) = dispatcher {
                             if let Some(bridge) = disp.get_bridge("mofa-prompt-input") {
-                                log::info!("Sending prompt via bridge: {}", message);
-                                if let Err(e) = bridge.send(
+                                info!(parent: &span, "Sending prompt via bridge");
+                                match bridge.send(
                                     "prompt",
                                     mofa_dora_bridge::DoraData::Text(message.clone()),
                                 ) {
-                                    log::error!("Failed to send prompt: {}", e);
+                                    Ok(()) => {
+                                        info!(parent: &span, "Prompt queued successfully");
+                                    }
+                                    Err(e) => {
+                                        error!(parent: &span, error = %e, "Failed to send prompt");
+                                    }
                                 }
                             } else {
-                                log::warn!("mofa-prompt-input bridge not found");
+                                warn!(parent: &span, "mofa-prompt-input bridge not found");
                             }
+                        } else {
+                            warn!(parent: &span, "No dispatcher available");
                         }
                     }
 
                     DoraCommand::SendControl { command } => {
+                        let span = info_span!("SendControl", command = %command);
                         if let Some(ref disp) = dispatcher {
                             if let Some(bridge) = disp.get_bridge("mofa-prompt-input") {
-                                log::info!("Sending control command: {}", command);
+                                info!(parent: &span, "Sending control command");
                                 let ctrl = mofa_dora_bridge::ControlCommand::new(&command);
-                                if let Err(e) = bridge
-                                    .send("control", mofa_dora_bridge::DoraData::Control(ctrl))
-                                {
-                                    log::error!("Failed to send control: {}", e);
+                                match bridge.send("control", mofa_dora_bridge::DoraData::Control(ctrl)) {
+                                    Ok(()) => {
+                                        info!(parent: &span, "Control command queued successfully");
+                                    }
+                                    Err(e) => {
+                                        error!(parent: &span, error = %e, "Failed to send control");
+                                    }
                                 }
                             } else {
-                                log::warn!("mofa-prompt-input bridge not found for control");
+                                warn!(parent: &span, "mofa-prompt-input bridge not found for control");
                             }
+                        } else {
+                            warn!(parent: &span, "No dispatcher available");
                         }
                     }
 

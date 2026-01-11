@@ -81,7 +81,7 @@ log_level = "INFO"         # DEBUG, INFO, WARN, ERROR
 id = "openai"
 kind = "openai"
 api_key = "sk-..."  # Or use "env:OPENAI_API_KEY"
-api_url = "https://api.openai.com/v1"
+api_url = "https://api.siliconflow.cn/v1"
 proxy = false
 
 # Google Gemini Provider
