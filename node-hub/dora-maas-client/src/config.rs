@@ -134,11 +134,28 @@ impl Config {
         };
 
         // Allow MAAS-prefixed env vars (e.g., MAAS_LOG_LEVEL)
-        // Also allow direct env vars for common settings (e.g., MAX_HISTORY_EXCHANGES)
-        let config: Config = figment
+        // Also allow direct env vars for common settings
+        let mut config: Config = figment
             .merge(Env::prefixed("MAAS_"))
-            .merge(Env::raw().only(&["MAX_HISTORY_EXCHANGES"]))
+            .merge(Env::raw().only(&["MAX_HISTORY_EXCHANGES", "DEFAULT_MODEL", "OPENAI_BASE_URL", "OPENAI_MODEL"]))
             .extract()?;
+
+        // Apply OPENAI_BASE_URL to openai provider if env var is set
+        if let Ok(base_url) = std::env::var("OPENAI_BASE_URL") {
+            if let Some(openai_provider) = config.providers.iter_mut().find(|p| matches!(p, ProviderConfig::Openai(_))) {
+                if let ProviderConfig::Openai(ref mut openai_config) = openai_provider {
+                    openai_config.api_url = base_url;
+                    eprintln!("✓ Applied OPENAI_BASE_URL to openai provider");
+                }
+            }
+        }
+
+        // Apply OPENAI_MODEL as default_model if env var is set
+        if let Ok(model) = std::env::var("OPENAI_MODEL") {
+            config.default_model = model;
+            eprintln!("✓ Applied OPENAI_MODEL as default_model");
+        }
+
         Ok(config)
     }
 
