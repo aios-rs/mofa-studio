@@ -68,7 +68,7 @@ nodes:
   # Multi-Input Text Segmenter with FIFO Session Queue
   - id: multi-text-segmenter
     build: uv pip install -e ../../../node-hub/dora-text-segmenter
-    path: dora-text-segmenter
+    path: /Users/lijing/.venv/bin/dora-text-segmenter
     inputs:
       # Participant inputs - output names are derived from these input port names
       student1:
@@ -117,7 +117,7 @@ nodes:
   # PrimeSpeech TTS for Student1 (Zhao Daniu - Male, Rational Voice)
   - id: primespeech-student1
     build: uv pip install -e ../../../libs/dora-common -e ../../../node-hub/dora-primespeech
-    path: dora-primespeech
+    path: /Users/lijing/.venv/bin/dora-primespeech
     inputs:
       text: multi-text-segmenter/text_segment_student1
     outputs:
@@ -148,7 +148,7 @@ nodes:
   # PrimeSpeech TTS for Student2 (Chen Yifan - Female, Emotional Voice)
   - id: primespeech-student2
     build: uv pip install -e ../../../libs/dora-common -e ../../../node-hub/dora-primespeech
-    path: dora-primespeech
+    path: /Users/lijing/.venv/bin/dora-primespeech
     inputs:
       text: multi-text-segmenter/text_segment_student2
     outputs:
@@ -179,7 +179,7 @@ nodes:
   # PrimeSpeech TTS for Tutor (Luo Xiang - Male, Authoritative Voice)
   - id: primespeech-tutor
     build: uv pip install -e ../../../libs/dora-common -e ../../../node-hub/dora-primespeech
-    path: dora-primespeech
+    path: /Users/lijing/.venv/bin/dora-primespeech
     inputs:
       text: multi-text-segmenter/text_segment_tutor
     outputs:
