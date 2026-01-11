@@ -88,6 +88,7 @@ impl DynamicNodeDispatcher {
     /// Create bridges for all discovered MoFA nodes
     pub fn create_bridges(&mut self) -> BridgeResult<()> {
         let mofa_nodes = self.discover_mofa_nodes();
+        info!("mofa_nodes:{:?}",mofa_nodes);
         let shared_state = Some(self.shared_state.clone());
 
         for node_spec in mofa_nodes {

@@ -32,9 +32,6 @@ pub struct Config {
     #[serde(default)]
     pub enable_local_mcp: bool, // Enable local MCP host (false = pass through to client)
     pub mcp: Option<McpConfig>, // MCP server configurations
-    // HTTP request cancellation settings
-    #[serde(default = "default_request_timeout")]
-    pub request_timeout_secs: u64,
     #[serde(default = "default_stream_timeout")]
     pub stream_timeout_secs: u64,
     #[serde(default = "default_enable_cancellation")]

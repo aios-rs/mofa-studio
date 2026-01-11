@@ -91,16 +91,16 @@ python test_dependencies.py
 cd models/model-manager
 
 # ASR models (FunASR Paraformer + punctuation)
-python download_models.py --download funasr
+uv run python download_models.py --download funasr
 
 # PrimeSpeech TTS (base + voices)
-python download_models.py --download primespeech
+uv run python download_models.py --download primespeech
 
 # List available voices
-python download_models.py --list-voices
+uv run python download_models.py --list-voices
 
 # Download specific voice
-python download_models.py --voice "Luo Xiang"
+uv run python download_models.py --voice "Luo Xiang"
 ```
 
 Models are stored in:

@@ -48,9 +48,6 @@ use config::{Config, load_anchor_context, format_anchor_context};
 use segmenter::StreamSegmenter;
 use tool::ToolSet;
 
-// Import CancellationReason from streaming module
-use crate::streaming::CancellationReason;
-
 // Helper function to send log messages
 fn send_log(node: &mut DoraNode, level: &str, message: &str) -> Result<()> {
     let log_data = json!({
@@ -331,7 +328,7 @@ async fn main() -> Result<()> {
     let tool_set = if config.enable_tools {
         match config.init_tool_set().await {
             Ok(Some(ts)) => {
-                let tool_count = ts.tools().len();
+                let _tool_count = ts.tools().len();
                 Some(Arc::new(Mutex::new(ts)))
             }
             Ok(None) => None,
@@ -556,7 +553,7 @@ async fn main() -> Result<()> {
                                 let request_clone = request.clone();
                                 let request_id = uuid::Uuid::new_v4().to_string();
                                 let session_id_clone = session_id.clone();
-                                let metadata_clone = metadata.parameters.clone();
+                                let _metadata_clone = metadata.parameters.clone();
                                 let cancellation_manager_clone = cancellation_manager.clone();
 
                                 // Create cancellation token if enabled
@@ -1471,7 +1468,7 @@ async fn main() -> Result<()> {
                                 let request_clone = request.clone();
                                 let request_id = uuid::Uuid::new_v4().to_string();
                                 let session_id_clone = session_id.clone();
-                                let metadata_clone = metadata.parameters.clone();
+                                let _metadata_clone = metadata.parameters.clone();
                                 let cancellation_manager_clone = cancellation_manager.clone();
 
                                 // Create cancellation token if enabled

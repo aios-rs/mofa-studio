@@ -6,15 +6,6 @@ use serde::Deserialize;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-/// Reasons why a request was cancelled
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub enum CancellationReason {
-    UserRequested { source: String },
-    Timeout { duration_secs: u64 },
-    NodeShutdown,
-    Error { details: String },
-}
-
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct StreamChunk {

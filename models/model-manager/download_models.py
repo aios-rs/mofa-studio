@@ -14,13 +14,44 @@ import fnmatch
 import subprocess
 import shutil
 
+# Helper function to install packages using uv if available, otherwise pip
+def install_package(package_name: str) -> bool:
+    """Install a package using uv if available, otherwise pip."""
+    import shutil
+
+    # Check if we're in a virtual environment
+    in_venv = hasattr(sys, 'real_prefix') or (
+        hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
+    )
+
+    # Check if uv is available and we're in a venv
+    uv_path = shutil.which("uv")
+    if uv_path and in_venv:
+        try:
+            # Use uv with the current Python to install to the active venv
+            subprocess.check_call([uv_path, "pip", "install", package_name, "--python", sys.executable])
+            return True
+        except subprocess.CalledProcessError:
+            pass  # Fall back to pip
+
+    # Fall back to python -m pip install
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install {package_name}: {e}")
+        return False
+
 # Progress bar imports
 try:
     from tqdm import tqdm
 except ImportError:
     print("Installing tqdm for progress bars...")
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "tqdm"])
+    if not install_package("tqdm"):
+        print("ERROR: Failed to install tqdm. Please install manually:")
+        print("  uv pip install tqdm")
+        print("  or: pip install tqdm")
+        sys.exit(1)
     from tqdm import tqdm
 
 # HuggingFace Hub
@@ -30,8 +61,11 @@ try:
     HF_AVAILABLE = True
 except ImportError:
     print("Installing huggingface-hub...")
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "huggingface-hub"])
+    if not install_package("huggingface-hub"):
+        print("ERROR: Failed to install huggingface-hub. Please install manually:")
+        print("  uv pip install huggingface-hub")
+        print("  or: pip install huggingface-hub")
+        sys.exit(1)
     from huggingface_hub import snapshot_download, hf_hub_download, list_repo_files, scan_cache_dir
     from huggingface_hub.utils import RepositoryNotFoundError
     HF_AVAILABLE = True
@@ -593,11 +627,11 @@ def list_downloaded_models():
         if model_dir.exists():
             print(f"\n📁 {model_dir}")
             print("-" * 60)
-            
+
             # Special handling for FunASR models
             funasr_dir = model_dir / "asr" / "funasr"
+            funasr_models = []  # Initialize before the if block to avoid UnboundLocalError
             if funasr_dir.exists():
-                funasr_models = []
                 for model_path in funasr_dir.iterdir():
                     if model_path.is_dir() and not model_path.name.startswith('.'):
                         size = sum(f.stat().st_size for f in model_path.rglob("*") if f.is_file())

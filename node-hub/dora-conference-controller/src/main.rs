@@ -224,14 +224,6 @@ impl ConferenceController {
         true
     }
 
-    /// Check if metadata indicates an error occurred
-    fn is_error_status(&self, metadata: &dora_node_api::Metadata) -> bool {
-        if let Some(Parameter::String(status)) = metadata.parameters.get("session_status") {
-            return status == "error" || status == "cancelled" || status == "reset";
-        }
-        false
-    }
-
     /// Accumulate streaming chunk and return whether message is now complete
     fn accumulate_streaming_input(
         &mut self,

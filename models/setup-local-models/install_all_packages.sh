@@ -38,15 +38,14 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     OS_TYPE="macos"
 fi
 
-# Activate conda environment
-print_header "Activating Conda Environment"
-eval "$(conda shell.bash hook)"
-if conda activate mofa-studio 2>/dev/null; then
-    print_success "Activated conda environment: mofa-studio"
-else
-    print_error "Conda environment 'mofa-studio' not found. Please create it first (see README)."
+# Check uv is installed
+print_header "Checking uv"
+if ! command -v uv &> /dev/null; then
+    print_error "uv is not installed. Please install it first: curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1
 fi
+print_success "uv is installed"
+uv --version
 
 # OS-specific dependency hints
 print_header "Checking System Dependencies"
@@ -70,23 +69,23 @@ print_header "Installing Dora Python Packages"
 cd "$PROJECT_ROOT"
 
 print_info "Installing dora-common (shared library)..."
-pip install -e libs/dora-common
+uv pip install -e libs/dora-common
 print_success "dora-common installed"
 
 print_info "Installing dora-primespeech..."
-pip install -e node-hub/dora-primespeech
+uv pip install -e node-hub/dora-primespeech
 print_success "dora-primespeech installed"
 
 print_info "Installing dora-asr..."
-pip install -e node-hub/dora-asr
+uv pip install -e node-hub/dora-asr
 print_success "dora-asr installed"
 
 print_info "Installing dora-speechmonitor..."
-pip install -e node-hub/dora-speechmonitor
+uv pip install -e node-hub/dora-speechmonitor
 print_success "dora-speechmonitor installed"
 
 print_info "Installing dora-text-segmenter..."
-pip install -e node-hub/dora-text-segmenter
+uv pip install -e node-hub/dora-text-segmenter
 print_success "dora-text-segmenter installed"
 
 # Install Rust if not already installed
