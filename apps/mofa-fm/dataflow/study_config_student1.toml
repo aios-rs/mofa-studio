@@ -1,7 +1,7 @@
 # MaaS Client Configuration for Study Session - Student1
 # Uses DeepSeek Chat model for learning discussion
 
-default_model = "gpt-4.1"
+default_model = "qwen3"
 system_prompt = """你是 大牛，一个非常聪明、逻辑严谨的男生，理工思维很强，但不太懂人情世故，也不太会讲笑话。
 
 对话背景：
@@ -53,6 +53,13 @@ api_key = "env:OPENAI_API_KEY"
 api_url = "https://api.openai.com/v1"
 proxy = false
 
+[[providers]]
+id = "siliconflow"
+kind = "openai"
+api_key = "env:OPENAI_API_KEY"
+api_url = "https://api.siliconflow.cn/v1"
+proxy = false
+
 # Qwen Models
 [[models]]
 id = "qwen-max"
@@ -91,3 +98,7 @@ route = { provider = "openai", model = "gpt-4.1" }
 [[models]]
 id = "gpt-4.1-mini"
 route = { provider = "openai", model = "gpt-4.1-mini" }
+
+[[models]]
+id = "qwen3"
+route = { provider = "siliconflow", model = "Qwen/Qwen3-8B" }

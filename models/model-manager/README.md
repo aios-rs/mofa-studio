@@ -35,6 +35,7 @@ Scans `~/.cache/huggingface/hub/` and `~/.dora/models/` (PrimeSpeech/Kokoro/FunA
 ```bash
 # ASR models (FunASR Paraformer + punctuation)
 python download_models.py --download funasr
+uv run download_models.py --download funasr
 
 # PrimeSpeech base (Chinese HuBERT & RoBERTa) + all voices
 python download_models.py --download primespeech
