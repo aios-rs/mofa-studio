@@ -1,0 +1,60 @@
+[project]
+name = "mofa-studio"
+version = "0.1.0"
+description = "MoFA Studio - Voice Chat Application"
+requires-python = ">=3.12"
+dependencies = [
+    # PyTorch (CPU version for cross-platform compatibility)
+    "torch==2.2.0",
+    "torchvision==0.17.0",
+    "torchaudio==2.2.0",
+    # Core ML dependencies
+    "numpy==1.26.4",
+    "transformers==4.45.0",
+    "huggingface-hub==0.34.4",
+    "dora-rs==0.3.12",
+    # Additional ML libraries
+    "datasets",
+    "accelerate",
+    "sentencepiece",
+    "protobuf",
+    # Audio processing
+    "librosa",
+    "soundfile",
+    "webrtcvad",
+    "pyaudio",
+    "sounddevice",
+    # Networking
+    "openai",
+    "websockets",
+    "aiohttp",
+    "requests",
+    # Utilities
+    "pyyaml",
+    "toml",
+    "python-dotenv",
+    "nltk",
+    "scipy",
+    "pyarrow",
+    # LLM
+    "llama-cpp-python",
+    # TTS
+    "kokoro",
+]
+
+[tool.uv]
+# Use PyPI as primary index, PyTorch wheels as extra
+# This ensures all packages can be found
+extra-index-url = ["https://download.pytorch.org/whl/cpu"]
+index-strategy = "unsafe-best-match"  # Allow matching versions from all indexes
+
+# Optional dependencies
+[project.optional-dependencies]
+# Dev dependencies (testing/development)
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+# Note: mlx-audio is excluded due to conflict with transformers==4.45.0
+# (mlx-audio requires transformers>=4.49.0)
+# Install manually on macOS if needed: uv pip install mlx-audio --upgrade transformers
